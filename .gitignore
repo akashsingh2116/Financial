@@ -1,0 +1,8 @@
+node_modules/
+server/uploads/*
+!server/uploads/.gitkeep
+server/finance.db
+server/finance.db-wal
+server/finance.db-shm
+server/backups/
+client/dist/
