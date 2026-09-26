@@ -33,9 +33,11 @@ export default function EntryDetailModal({ entry, notes, onClose, onEdit }) {
         <div className="detail-grid">
           <Detail label="Owner" value={entry.owner_name} />
           <Detail label="Product" value={entry.product} />
+          <Detail label="Group" value={entry.group_name || 'No group'} />
           <Detail label="Issuer" value={entry.issuer || '—'} />
           <Detail label="Status" value={<span className={`badge status-${entry.status}`}>{entry.status}</span>} />
           <Detail label="Amount invested" value={`₹${formatMoney(entry.amount)}`} />
+          <Detail label="Rate of interest" value={entry.interest_rate == null || entry.interest_rate === '' ? '—' : `${entry.interest_rate}%`} />
           <Detail label="Maturity amount" value={`₹${formatMoney(entry.maturity_amount)}`} />
           <Detail label="Projected gain" value={`₹${formatMoney(gain)}`} />
           <Detail label="Premium frequency" value={entry.premium_frequency || '—'} />

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import EntryFormModal from './EntryFormModal';
 import EntryDetailModal from './EntryDetailModal';
-import { createEntry, updateEntry, deleteEntry } from '../api';
+import { createEntry, createGroup, updateEntry, deleteEntry } from '../api';
 import { STATUS_OPTIONS } from '../constants';
-import { daysUntil, formatMoney } from '../format';
+import { daysUntil, formatDate, formatMoney } from '../format';
 import {
   entryKey,
   exportCsv,
@@ -14,19 +14,28 @@ import {
   toFormData,
 } from '../transfer';
 
-export default function EntriesTab({ entries, notes, reload }) {
+const PAGE_SIZE = 50;
+
+export default function EntriesTab({ entries, notes, groups = [], reload }) {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [productFilter, setProductFilter] = useState('all');
   const [ownerFilter, setOwnerFilter] = useState('all');
+  const [groupFilter, setGroupFilter] = useState('all');
+  const [page, setPage] = useState(1);
   const [modalEntry, setModalEntry] = useState(undefined); // undefined = closed, null = new, object = edit
   const [viewEntry, setViewEntry] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [busy, setBusy] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [actionMenu, setActionMenu] = useState(null);
   const [importing, setImporting] = useState(false);
   const [transferMessage, setTransferMessage] = useState('');
   const [transferError, setTransferError] = useState('');
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, statusFilter, productFilter, ownerFilter, groupFilter]);
 
   useEffect(() => {
     if (!exportOpen) return undefined;
@@ -34,6 +43,36 @@ export default function EntriesTab({ entries, notes, reload }) {
     window.addEventListener('click', close);
     return () => window.removeEventListener('click', close);
   }, [exportOpen]);
+
+  useEffect(() => {
+    if (!actionMenu) return undefined;
+    function close() { setActionMenu(null); }
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [actionMenu]);
+
+  function toggleActionMenu(event, entry) {
+    event.stopPropagation();
+    if (actionMenu?.id === entry.id) {
+      setActionMenu(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const menuHeight = 132;
+    const openUp = window.innerHeight - rect.bottom < menuHeight + 8;
+    setActionMenu({
+      id: entry.id,
+      entry,
+      top: openUp ? rect.top - menuHeight - 6 : rect.bottom + 6,
+      left: Math.max(8, rect.right - 160),
+    });
+  }
 
   const owners = useMemo(
     () => [...new Set(entries.map((e) => e.owner_name).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
@@ -44,20 +83,31 @@ export default function EntriesTab({ entries, notes, reload }) {
     [entries],
   );
 
+  function groupName(entry) {
+    return groups.find((group) => String(group.id) === String(entry.group_id))?.name || '';
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
       if (statusFilter !== 'all' && e.status !== statusFilter) return false;
       if (productFilter !== 'all' && e.product !== productFilter) return false;
       if (ownerFilter !== 'all' && e.owner_name !== ownerFilter) return false;
+      if (groupFilter === 'none' && e.group_id) return false;
+      if (groupFilter !== 'all' && groupFilter !== 'none' && String(e.group_id) !== String(groupFilter)) return false;
       if (!q) return true;
-      return [e.serial_no, e.owner_name, e.product, e.nominee_name, e.issuer, e.remarks]
+      const name = groups.find((group) => String(group.id) === String(e.group_id))?.name || '';
+      return [e.serial_no, e.owner_name, e.product, e.nominee_name, e.issuer, e.remarks, name]
         .some((value) => value?.toLowerCase().includes(q));
     });
-  }, [entries, query, statusFilter, productFilter, ownerFilter]);
+  }, [entries, groups, query, statusFilter, productFilter, ownerFilter, groupFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const linkedNotes = useMemo(
-    () => (viewEntry ? notes.filter((note) => note.entry_id === viewEntry.id) : []),
+    () => (viewEntry ? notes.filter((note) => String(note.entry_id) === String(viewEntry.id)) : []),
     [notes, viewEntry],
   );
 
@@ -76,10 +126,11 @@ export default function EntriesTab({ entries, notes, reload }) {
     setTransferError('');
     setTransferMessage('');
     try {
-      if (kind === 'excel') exportExcel(filtered);
-      else if (kind === 'word') await exportWord(filtered);
-      else if (kind === 'pdf') exportPdf(filtered);
-      else exportCsv(filtered);
+      const named = filtered.map((entry) => ({ ...entry, group_name: groupName(entry) }));
+      if (kind === 'excel') exportExcel(named);
+      else if (kind === 'word') await exportWord(named);
+      else if (kind === 'pdf') exportPdf(named);
+      else exportCsv(named);
     } catch (err) {
       setTransferError(err.message || 'Export failed');
     }
@@ -103,6 +154,7 @@ export default function EntriesTab({ entries, notes, reload }) {
       }
 
       const seen = new Set(entries.map(entryKey));
+      const knownGroups = [...groups];
       let added = 0;
       let skipped = 0;
       for (const record of records) {
@@ -111,7 +163,17 @@ export default function EntriesTab({ entries, notes, reload }) {
           skipped += 1;
           continue;
         }
-        await createEntry(toFormData(record));
+        const formData = toFormData(record);
+        const groupNameValue = String(record.group_name || '').trim();
+        if (groupNameValue) {
+          let group = knownGroups.find((item) => item.name.toLowerCase() === groupNameValue.toLowerCase());
+          if (!group) {
+            group = await createGroup(groupNameValue);
+            knownGroups.push(group);
+          }
+          formData.set('group_id', String(group.id));
+        }
+        await createEntry(formData);
         seen.add(key);
         added += 1;
       }
@@ -157,6 +219,11 @@ export default function EntriesTab({ entries, notes, reload }) {
           <option value="all">All products</option>
           {products.map((product) => <option key={product} value={product}>{product}</option>)}
         </select>
+        <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+          <option value="all">All groups</option>
+          <option value="none">No group</option>
+          {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+        </select>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="all">All statuses</option>
           {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>)}
@@ -201,49 +268,53 @@ export default function EntriesTab({ entries, notes, reload }) {
         </div>
       ) : (
         <div className="table-wrap">
-          <table>
+          <table className="entry-table">
             <thead>
               <tr>
-                <th>Serial No</th>
-                <th>Owner</th>
+                <th>Entry</th>
                 <th>Product</th>
-                <th>Amount</th>
-                <th>Maturity Amt</th>
-                <th>Issue Date</th>
-                <th>Maturity Date</th>
-                <th>Nominee</th>
+                <th className="num">Invested</th>
+                <th className="num">Maturity</th>
+                <th>Term</th>
                 <th>Status</th>
-                <th>Doc</th>
-                <th></th>
+                <th className="actions-head">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((e) => {
+              {visible.map((e) => {
                 const days = daysUntil(e.date_of_maturity);
                 const soon = e.status === 'active' && days >= 0 && days <= 90;
                 const overdue = e.status === 'active' && days < 0;
                 return (
                   <tr key={e.id} className={overdue ? 'row-overdue' : soon ? 'row-soon' : ''}>
                     <td>
-                      <button className="link-btn" onClick={() => setViewEntry(e)}>{e.serial_no}</button>
+                      <div className="cell-title">
+                        <button className="link-btn" onClick={() => setViewEntry(e)}>{e.serial_no}</button>
+                        {e.pending && <span className="badge badge-warn">Sync</span>}
+                        {e.document_path && <span className="badge badge-doc">Doc</span>}
+                      </div>
+                      <div className="cell-sub"><span className="cell-label">Owner</span> {e.owner_name}</div>
+                      {e.nominee_name && <div className="cell-sub"><span className="cell-label">Nominee</span> {e.nominee_name}</div>}
                     </td>
-                    <td>{e.owner_name}</td>
-                    <td>{e.product}</td>
-                    <td>₹{formatMoney(e.amount)}</td>
-                    <td>₹{formatMoney(e.maturity_amount)}</td>
-                    <td>{e.date_of_issue}</td>
                     <td>
-                      {e.date_of_maturity}
-                      {soon && <span className="badge badge-warn">{days}d left</span>}
-                      {overdue && <span className="badge badge-danger">overdue</span>}
+                      <div className="cell-title">{e.product}</div>
+                      <div className="cell-sub"><span className="cell-label">Group</span> {groupName(e) || 'None'}</div>
                     </td>
-                    <td>{e.nominee_name}</td>
+                    <td className="num">₹{formatMoney(e.amount)}</td>
+                    <td className="num">₹{formatMoney(e.maturity_amount)}</td>
+                    <td>
+                      <div className="cell-title">{formatDate(e.date_of_issue)}</div>
+                      <div className="cell-sub">
+                        to {formatDate(e.date_of_maturity)}
+                        {soon && <span className="badge badge-warn">{days}d left</span>}
+                        {overdue && <span className="badge badge-danger">{Math.abs(days)}d overdue</span>}
+                      </div>
+                    </td>
                     <td><span className={`badge status-${e.status}`}>{e.status}</span></td>
-                    <td>{e.document_path ? '📎' : <span className="muted">—</span>}</td>
                     <td className="actions-cell">
-                      <button className="link-btn" onClick={() => setViewEntry(e)}>View</button>
-                      <button className="link-btn" onClick={() => setModalEntry(e)}>Edit</button>
-                      <button className="link-btn danger" onClick={() => setDeleteTarget(e)}>Delete</button>
+                      <button type="button" className="btn btn-ghost action-btn" onClick={(event) => toggleActionMenu(event, e)}>
+                        Actions
+                      </button>
                     </td>
                   </tr>
                 );
@@ -252,10 +323,28 @@ export default function EntriesTab({ entries, notes, reload }) {
           </table>
         </div>
       )}
+      {actionMenu && (
+        <div
+          className="menu-panel menu-panel-fixed"
+          style={{ top: actionMenu.top, left: actionMenu.left }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" className="menu-item" onClick={() => { setViewEntry(actionMenu.entry); setActionMenu(null); }}>View</button>
+          <button type="button" className="menu-item" onClick={() => { setModalEntry(actionMenu.entry); setActionMenu(null); }}>Edit</button>
+          <button type="button" className="menu-item menu-item-danger" onClick={() => { setDeleteTarget(actionMenu.entry); setActionMenu(null); }}>Delete</button>
+        </div>
+      )}
+      {filtered.length > PAGE_SIZE && (
+        <div className="pager">
+          <button type="button" className="btn btn-ghost" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>Previous</button>
+          <span>{(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}</span>
+          <button type="button" className="btn btn-ghost" disabled={safePage >= pageCount} onClick={() => setPage(safePage + 1)}>Next</button>
+        </div>
+      )}
 
       {viewEntry && (
         <EntryDetailModal
-          entry={viewEntry}
+          entry={{ ...viewEntry, group_name: groupName(viewEntry) }}
           notes={linkedNotes}
           onClose={() => setViewEntry(null)}
           onEdit={() => {
@@ -268,6 +357,7 @@ export default function EntriesTab({ entries, notes, reload }) {
       {modalEntry !== undefined && (
         <EntryFormModal
           entry={modalEntry}
+          groups={groups}
           onClose={() => setModalEntry(undefined)}
           onSubmit={handleSubmit}
         />

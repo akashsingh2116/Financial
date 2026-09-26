@@ -6,8 +6,8 @@ and similar instruments — with document attachments and free-form notes.
 ## Stack
 
 - **client/** — React + Vite (three tabs: Overview, Finance Entries, Notes)
-- **server/** — Express API, SQLite (Node's built-in `node:sqlite`), file uploads via Multer
-- Uploaded documents are stored on disk at `server/uploads/` and downloaded through the API while you are logged in.
+- **server/** — Express API. Locally this uses SQLite. With Firebase env vars set, records go to Cloud Firestore and uploaded files go to Cloud Storage.
+- Uploaded documents are downloaded through the API while you are logged in.
 
 ## Setup
 
@@ -33,9 +33,10 @@ maturities. It talks to the local API, so `npm run dev` needs to be running.
 The site is deployed on Vercel from this repo. Static files are built into
 `public/`. The API is the Express app.
 
-Vercel does not keep a disk between updates, so entries and uploaded documents
-live in temporary storage there and can disappear when Vercel replaces the
-server. Your computer copy in `server/finance.db` is the durable one.
+Vercel does not keep a disk between updates. Set the Firebase env vars on the
+Vercel project before relying on the live site, otherwise entries and uploaded
+documents live in temporary storage and can disappear when Vercel replaces the
+server. Without those vars, the computer copy in `server/finance.db` is the durable one.
 
 DNS for whoisakash.com is at BigRock. Point the subdomain at Vercel with:
 
@@ -60,11 +61,28 @@ AUTH_USERNAME=yourname AUTH_PASSWORD=yourpassword npm run dev --prefix server
 Sessions are simple bearer tokens kept in memory on the server — they reset if the
 server restarts (you'll just need to log in again).
 
+## Firebase
+
+Firestore holds entries, groups, and notes. Cloud Storage holds the attached files, in a separate 5 GB no-cost allowance, so 1,000 records can each keep a normal document. A file can still be up to 15 MB. One thousand files fit while their total size stays around 5 GB (about 5 MB each). Past that, storage is billed per extra gigabyte.
+
+Cloud Storage requires the Firebase Blaze plan. Blaze is pay-as-you-go and still includes that no-cost allowance, but the project needs a billing account. Firestore itself stays inside the free limits for this app.
+
+1. Create a Firebase project and upgrade it to Blaze.
+2. Create a Firestore database and a Storage bucket. In `US-CENTRAL1`, `US-EAST1`, or `US-WEST1` the bucket can use the always-free storage tier.
+3. Project settings → Service accounts → Generate new private key. Save that JSON as `server/firebase-service-account.json` (it is gitignored).
+4. Start the API with:
+
+```bash
+FIREBASE_SERVICE_ACCOUNT_PATH=server/firebase-service-account.json FIREBASE_STORAGE_BUCKET=your-project.firebasestorage.app npm run dev
+```
+
+On Vercel, set `FIREBASE_SERVICE_ACCOUNT` to the JSON file contents and `FIREBASE_STORAGE_BUCKET` to the bucket name. Leave both unset to keep using local SQLite. Vercel’s request limit is about 4.5 MB, so a larger file uploads on your computer but can be rejected on the live site until the browser uploads straight to Storage.
+
+The browser never talks to Firebase. The API uses the service account, so Firestore and Storage rules should deny all client access.
+
 ## Data
 
-Records already live in a SQLite database, `server/finance.db`. A few hundred
-entries is a tiny amount for it. Notes are in the same file. Uploaded documents
-are stored next to it in `server/uploads/`.
+Without Firebase env vars, records live in a SQLite database, `server/finance.db`. Notes are in the same file. Uploaded documents are stored next to it in `server/uploads/`.
 
 The database and uploads are gitignored, so GitHub is not a copy of your data.
 Each time the API starts, and again every 24 hours while it is running, it saves

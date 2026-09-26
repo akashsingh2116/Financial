@@ -60,7 +60,7 @@ export default function NotesTab({ notes, entries, reload }) {
 
   function linkedEntry(note) {
     if (!note.entry_id) return null;
-    return entries.find((e) => e.id === note.entry_id);
+    return entries.find((e) => String(e.id) === String(note.entry_id));
   }
 
   return (
@@ -105,6 +105,7 @@ export default function NotesTab({ notes, entries, reload }) {
                 {note.title && <h4>{note.title}</h4>}
                 <p className="note-content">{note.content}</p>
                 {linked && <div className="note-link">🔗 {linked.serial_no} — {linked.owner_name}</div>}
+                {note.pending && <div className="muted">Waiting to sync</div>}
                 <div className="note-footer">
                   <span className="muted">{formatDateTime(note.updated_at)}</span>
                   <div className="note-actions">

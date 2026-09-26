@@ -47,4 +47,4 @@ function requireAuth(req, res, next) {
   next();
 }
 
-module.exports = { login, isValidToken, logout, requireAuth };
+module.exports = { login, isValidToken, logout, requireAuth, sign };

@@ -11,3 +11,7 @@ public/
 
 .vercel
 .env*
+server/firebase-service-account.json
+*firebase-adminsdk*.json
+server/google-oauth.json
+server/google-client.json

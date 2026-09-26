@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PRODUCT_TYPES, STATUS_OPTIONS, PREMIUM_FREQUENCIES } from '../constants';
 import { openDocument } from '../api';
+import { calculateMaturityAmount } from '../interest';
 
 const EMPTY_FORM = {
   serial_no: '',
@@ -9,6 +10,7 @@ const EMPTY_FORM = {
   product_other: '',
   issuer: '',
   amount: '',
+  interest_rate: '',
   maturity_amount: '',
   date_of_issue: '',
   date_of_maturity: '',
@@ -16,11 +18,12 @@ const EMPTY_FORM = {
   nominee_relation: '',
   premium_frequency: 'One-time',
   status: 'active',
+  group_id: '',
   remarks: '',
 };
 
-function toFormState(entry) {
-  if (!entry) return EMPTY_FORM;
+function toFormState(entry, defaultGroupId = '') {
+  if (!entry) return { ...EMPTY_FORM, group_id: defaultGroupId ? String(defaultGroupId) : '' };
   const isKnownProduct = PRODUCT_TYPES.includes(entry.product);
   return {
     serial_no: entry.serial_no || '',
@@ -29,6 +32,7 @@ function toFormState(entry) {
     product_other: isKnownProduct ? '' : entry.product || '',
     issuer: entry.issuer || '',
     amount: entry.amount ?? '',
+    interest_rate: entry.interest_rate ?? '',
     maturity_amount: entry.maturity_amount ?? '',
     date_of_issue: entry.date_of_issue || '',
     date_of_maturity: entry.date_of_maturity || '',
@@ -36,6 +40,7 @@ function toFormState(entry) {
     nominee_relation: entry.nominee_relation || '',
     premium_frequency: entry.premium_frequency || 'One-time',
     status: entry.status || 'active',
+    group_id: entry.group_id == null || entry.group_id === '' ? '' : String(entry.group_id),
     remarks: entry.remarks || '',
   };
 }
@@ -51,8 +56,8 @@ const REQUIRED_LABELS = {
   nominee_name: 'Nominee name',
 };
 
-export default function EntryFormModal({ entry, onClose, onSubmit }) {
-  const [form, setForm] = useState(() => toFormState(entry));
+export default function EntryFormModal({ entry, groups = [], defaultGroupId = '', onClose, onSubmit }) {
+  const [form, setForm] = useState(() => toFormState(entry, defaultGroupId));
   const [file, setFile] = useState(null);
   const [removeDocument, setRemoveDocument] = useState(false);
   const [errors, setErrors] = useState({});
@@ -61,8 +66,18 @@ export default function EntryFormModal({ entry, onClose, onSubmit }) {
 
   const isEdit = Boolean(entry);
 
-  function update(field, value) {
-    setForm((f) => ({ ...f, [field]: value }));
+  const MATURITY_INPUTS = new Set([
+  'interest_rate', 'amount', 'date_of_issue', 'date_of_maturity', 'premium_frequency', 'product',
+]);
+
+function update(field, value) {
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      if (!MATURITY_INPUTS.has(field)) return next;
+      const calculated = calculateMaturityAmount(next);
+      if (calculated != null) next.maturity_amount = String(calculated);
+      return next;
+    });
   }
 
   function validate() {
@@ -74,6 +89,9 @@ export default function EntryFormModal({ entry, onClose, onSubmit }) {
     if (!finalProduct) next.product = 'Required';
     if (form.amount === '' || Number.isNaN(Number(form.amount)) || Number(form.amount) < 0) {
       next.amount = 'Enter a valid amount';
+    }
+    if (form.interest_rate !== '' && (Number.isNaN(Number(form.interest_rate)) || Number(form.interest_rate) < 0)) {
+      next.interest_rate = 'Enter a valid rate';
     }
     if (form.maturity_amount === '' || Number.isNaN(Number(form.maturity_amount)) || Number(form.maturity_amount) < 0) {
       next.maturity_amount = 'Enter a valid amount';
@@ -124,6 +142,7 @@ export default function EntryFormModal({ entry, onClose, onSubmit }) {
     fd.append('product', finalProduct);
     fd.append('issuer', form.issuer.trim());
     fd.append('amount', form.amount);
+    fd.append('interest_rate', form.interest_rate);
     fd.append('maturity_amount', form.maturity_amount);
     fd.append('date_of_issue', form.date_of_issue);
     fd.append('date_of_maturity', form.date_of_maturity);
@@ -131,6 +150,7 @@ export default function EntryFormModal({ entry, onClose, onSubmit }) {
     fd.append('nominee_relation', form.nominee_relation.trim());
     fd.append('premium_frequency', form.premium_frequency);
     fd.append('status', form.status);
+    fd.append('group_id', form.group_id);
     fd.append('remarks', form.remarks.trim());
     if (file) fd.append('document', file);
     if (removeDocument) fd.append('remove_document', 'true');
@@ -177,6 +197,13 @@ export default function EntryFormModal({ entry, onClose, onSubmit }) {
               )}
             </Field>
 
+            <Field label="Group" hint="Keeps this entry with the other records in that group.">
+              <select value={form.group_id} onChange={(e) => update('group_id', e.target.value)}>
+                <option value="">No group</option>
+                {groups.map((group) => <option key={group.id} value={String(group.id)}>{group.name}</option>)}
+              </select>
+            </Field>
+
             <Field label="Issuer / Company" hint="e.g. LIC of India, SBI, HDFC">
               <input value={form.issuer} onChange={(e) => update('issuer', e.target.value)} placeholder="Optional" />
             </Field>
@@ -185,7 +212,15 @@ export default function EntryFormModal({ entry, onClose, onSubmit }) {
               <input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => update('amount', e.target.value)} placeholder="Invested / premium amount" />
             </Field>
 
-            <Field label={`${REQUIRED_LABELS.maturity_amount} (₹) *`} error={errors.maturity_amount}>
+            <Field label="Rate of interest (%)" error={errors.interest_rate} hint="Optional. Fills the maturity amount from the amount, dates, and premium frequency.">
+              <input type="number" min="0" step="0.01" value={form.interest_rate} onChange={(e) => update('interest_rate', e.target.value)} placeholder="e.g. 7.5" />
+            </Field>
+
+            <Field
+              label={`${REQUIRED_LABELS.maturity_amount} (₹) *`}
+              error={errors.maturity_amount}
+              hint={form.interest_rate !== '' ? 'Calculated from the rate of interest. You can still edit it.' : undefined}
+            >
               <input type="number" min="0" step="0.01" value={form.maturity_amount} onChange={(e) => update('maturity_amount', e.target.value)} placeholder="Expected amount at maturity" />
             </Field>
 
