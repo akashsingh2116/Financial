@@ -12,6 +12,9 @@
     "client": "npm run dev --prefix client"
   },
   "license": "ISC",
+  "engines": {
+    "node": "24.x"
+  },
   "devDependencies": {
     "concurrently": "^10.0.5"
   }

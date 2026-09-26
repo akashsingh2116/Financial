@@ -1,0 +1,8 @@
+{
+  "installCommand": "npm install --prefix server && npm install --prefix client",
+  "buildCommand": "npm run build --prefix client",
+  "framework": null,
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/server" }
+  ]
+}

@@ -8,7 +8,7 @@ const db = require('./db');
 const { backupData } = require('./backup');
 const { login, logout, requireAuth } = require('./auth');
 
-const DATA_DIR = process.env.DATA_DIR || __dirname;
+const { DATA_DIR } = require('./paths');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -283,8 +283,12 @@ app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-const clientDist = path.join(__dirname, '..', 'client', 'dist');
-if (fs.existsSync(clientDist)) {
+const clientDist = [
+  path.join(__dirname, '..', 'public'),
+  path.join(__dirname, '..', 'client', 'dist'),
+].find((dir) => fs.existsSync(path.join(dir, 'index.html')));
+
+if (clientDist) {
   app.use(express.static(clientDist));
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
@@ -292,12 +296,18 @@ if (fs.existsSync(clientDist)) {
   });
 }
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Finance dashboard running on http://localhost:${PORT}`);
-  if (process.env.NODE_ENV === 'production' && !process.env.AUTH_PASSWORD) {
-    console.warn('AUTH_PASSWORD is not set. Change it before using this on the public internet.');
-  }
-  backupData();
-  setInterval(backupData, 24 * 60 * 60 * 1000).unref();
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 4000;
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Finance dashboard running on http://localhost:${PORT}`);
+    if (process.env.NODE_ENV === 'production' && !process.env.AUTH_PASSWORD) {
+      console.warn('AUTH_PASSWORD is not set. Change it before using this on the public internet.');
+    }
+    if (!process.env.VERCEL) {
+      backupData();
+      setInterval(backupData, 24 * 60 * 60 * 1000).unref();
+    }
+  });
+}
+
+module.exports = app;

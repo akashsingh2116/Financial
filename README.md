@@ -30,19 +30,18 @@ maturities. It talks to the local API, so `npm run dev` needs to be running.
 
 ## financial.whoisakash.com
 
-whoisakash.com is on Vercel, but this app keeps a SQLite database and uploaded
-files on disk, so it needs a host with a persistent disk. `render.yaml` is set
-up for that: the database and documents live on a disk mounted at `/data`.
+The site is deployed on Vercel from this repo. Static files are built into
+`public/`. The API is the Express app.
 
-After the service is online, add this record in BigRock DNS for whoisakash.com:
+Vercel does not keep a disk between updates, so entries and uploaded documents
+live in temporary storage there and can disappear when Vercel replaces the
+server. Your computer copy in `server/finance.db` is the durable one.
+
+DNS for whoisakash.com is at BigRock. Point the subdomain at Vercel with:
 
 | Type | Host | Value |
 | --- | --- | --- |
-| CNAME | financial | the host name Render gives you |
-
-Then add `financial.whoisakash.com` as the custom domain on that service.
-Set `AUTH_USERNAME` and `AUTH_PASSWORD` on the host. The password in this
-README is for your computer only.
+| CNAME | financial | cname.vercel-dns.com |
 
 ## Login
 
