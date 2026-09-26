@@ -2,8 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const db = require('./db');
 
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, 'backups');
 const KEEP_SNAPSHOTS = 30;
 
 function snapshotDatabase() {

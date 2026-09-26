@@ -8,7 +8,8 @@ const db = require('./db');
 const { backupData } = require('./backup');
 const { login, logout, requireAuth } = require('./auth');
 
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']);
@@ -278,9 +279,25 @@ app.use((err, req, res, next) => {
   });
 });
 
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+const clientDist = path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
+
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`Finance dashboard API running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Finance dashboard running on http://localhost:${PORT}`);
+  if (process.env.NODE_ENV === 'production' && !process.env.AUTH_PASSWORD) {
+    console.warn('AUTH_PASSWORD is not set. Change it before using this on the public internet.');
+  }
   backupData();
   setInterval(backupData, 24 * 60 * 60 * 1000).unref();
 });

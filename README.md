@@ -28,6 +28,22 @@ maturities. It talks to the local API, so `npm run dev` needs to be running.
 3. Choose **Load unpacked** and select the `extension` folder
 4. Pin Finance Tracker, then sign in with the same username and password as the app
 
+## financial.whoisakash.com
+
+whoisakash.com is on Vercel, but this app keeps a SQLite database and uploaded
+files on disk, so it needs a host with a persistent disk. `render.yaml` is set
+up for that: the database and documents live on a disk mounted at `/data`.
+
+After the service is online, add this record in BigRock DNS for whoisakash.com:
+
+| Type | Host | Value |
+| --- | --- | --- |
+| CNAME | financial | the host name Render gives you |
+
+Then add `financial.whoisakash.com` as the custom domain on that service.
+Set `AUTH_USERNAME` and `AUTH_PASSWORD` on the host. The password in this
+README is for your computer only.
+
 ## Login
 
 Single-user app, credentials are fixed server-side (not self-service signup).
