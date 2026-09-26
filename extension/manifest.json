@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Finance Tracker",
+  "version": "1.0.0",
+  "description": "Quick view of your local Finance Tracker: active totals and upcoming maturities.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Finance Tracker"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost:4000/*",
+    "http://127.0.0.1:4000/*"
+  ]
+}

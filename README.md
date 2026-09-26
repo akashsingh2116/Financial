@@ -18,6 +18,16 @@ npm run dev            # runs API on :4000 and the app on :5173 (with proxy)
 
 Then open http://localhost:5173.
 
+## Browser extension
+
+`extension/` is a Chrome extension for a quick look at active totals and upcoming
+maturities. It talks to the local API, so `npm run dev` needs to be running.
+
+1. Open `chrome://extensions`
+2. Turn on Developer mode
+3. Choose **Load unpacked** and select the `extension` folder
+4. Pin Finance Tracker, then sign in with the same username and password as the app
+
 ## Login
 
 Single-user app, credentials are fixed server-side (not self-service signup).
