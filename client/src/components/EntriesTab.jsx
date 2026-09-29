@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import EntryFormModal from './EntryFormModal';
 import EntryDetailModal from './EntryDetailModal';
 import { createEntry, createGroup, updateEntry, deleteEntry } from '../api';
@@ -64,13 +65,15 @@ export default function EntriesTab({ entries, notes, groups = [], reload }) {
       return;
     }
     const rect = event.currentTarget.getBoundingClientRect();
-    const menuHeight = 132;
+    // Sized to the compact menu below; it opens right under the button, or above it near the screen bottom.
+    const menuHeight = 102;
+    const menuWidth = 128;
     const openUp = window.innerHeight - rect.bottom < menuHeight + 8;
     setActionMenu({
       id: entry.id,
       entry,
-      top: openUp ? rect.top - menuHeight - 6 : rect.bottom + 6,
-      left: Math.max(8, rect.right - 160),
+      top: openUp ? rect.top - menuHeight - 4 : rect.bottom + 4,
+      left: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
     });
   }
 
@@ -323,7 +326,7 @@ export default function EntriesTab({ entries, notes, groups = [], reload }) {
           </table>
         </div>
       )}
-      {actionMenu && (
+      {actionMenu && createPortal(
         <div
           className="menu-panel menu-panel-fixed"
           style={{ top: actionMenu.top, left: actionMenu.left }}
@@ -332,7 +335,9 @@ export default function EntriesTab({ entries, notes, groups = [], reload }) {
           <button type="button" className="menu-item" onClick={() => { setViewEntry(actionMenu.entry); setActionMenu(null); }}>View</button>
           <button type="button" className="menu-item" onClick={() => { setModalEntry(actionMenu.entry); setActionMenu(null); }}>Edit</button>
           <button type="button" className="menu-item menu-item-danger" onClick={() => { setDeleteTarget(actionMenu.entry); setActionMenu(null); }}>Delete</button>
-        </div>
+        </div>,
+        // Rendered on the page body so animated parents cannot shift where it appears.
+        document.body,
       )}
       {filtered.length > PAGE_SIZE && (
         <div className="pager">

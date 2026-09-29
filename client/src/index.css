@@ -394,6 +394,7 @@ body::after {
   .tab-indicator,
   .tab-panel,
   .to-top,
+  .menu-panel-fixed,
   .btn { transition: none; animation: none; }
   .btn:hover:not(:disabled) { transform: none; }
 }
@@ -590,12 +591,26 @@ body::after {
 .menu-panel-fixed {
   position: fixed;
   z-index: 40;
-  min-width: 148px;
+  width: 128px;
+  min-width: 0;
+  padding: 0.25rem;
+  animation: menu-in 0.14s ease-out both;
+}
+
+.menu-panel-fixed .menu-item {
+  padding: 0.4rem 0.65rem;
+  font-size: 0.85rem;
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
 }
 
 .action-btn {
-  padding: 0.32rem 0.7rem;
-  font-size: 0.8rem;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: 8px;
 }
 
 .import-btn input { display: none; }
@@ -1215,13 +1230,15 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* Motion and feedback */
 
+/* Fill "backwards" only: once the fade-in ends no transform is left on the
+   panel, which would otherwise shift fixed-position menus and dialogs inside it. */
 .tab-panel {
-  animation: panel-in 0.38s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+  animation: panel-in 0.38s cubic-bezier(0.22, 0.9, 0.3, 1) backwards;
 }
 
 @keyframes panel-in {
   from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  to { opacity: 1; transform: none; }
 }
 
 .btn:hover:not(:disabled) { transform: translateY(-1px); }
