@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import LoginPage from './components/LoginPage';
+import useScrollHeader from './useScrollHeader';
 import OverviewTab from './components/OverviewTab';
 import EntriesTab from './components/EntriesTab';
 import NotesTab from './components/NotesTab';
@@ -131,6 +132,48 @@ export default function App() {
     return undefined;
   }, [token]);
 
+  const { scrolled, condensed, showTop } = useScrollHeader();
+  const tabsRef = useRef(null);
+  const [indicator, setIndicator] = useState(null);
+
+  // Slides the highlight under the active tab and keeps that tab in view on narrow screens.
+  useLayoutEffect(() => {
+    const nav = tabsRef.current;
+    if (!nav) return undefined;
+    function place() {
+      const active = nav.querySelector('.tab-btn-active');
+      if (!active) return;
+      setIndicator({ left: active.offsetLeft, width: active.offsetWidth });
+    }
+    place();
+    const active = nav.querySelector('.tab-btn-active');
+    if (active && nav.scrollWidth > nav.clientWidth) {
+      nav.scrollTo({ left: active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2, behavior: 'smooth' });
+    }
+    const observer = new ResizeObserver(place);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [tab, token, drive.connected]);
+
+  const topRef = useRef(null);
+
+  // The condensed header slides up by exactly the brand row's height.
+  useLayoutEffect(() => {
+    const top = topRef.current;
+    const row = top?.querySelector('.app-header-row');
+    if (!row) return undefined;
+    const measure = () => top.style.setProperty('--brand-row-height', `${row.offsetHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [token]);
+
+  function changeTab(key) {
+    setTab(key);
+    if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   if (!token) {
     return <LoginPage onLogin={setToken} />;
   }
@@ -142,6 +185,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <div ref={topRef} className={`app-top${scrolled ? ' is-scrolled' : ''}${condensed ? ' is-condensed' : ''}`}>
       <header className="app-header">
         <div className="app-header-row">
           <div className="brand">
@@ -155,7 +199,7 @@ export default function App() {
           </div>
           <div className="header-actions">
             {drive.connected ? (
-              <div className="drive-chip">
+              <div className="drive-chip" title={drive.email}>
                 <span className="drive-dot" aria-hidden="true" />
                 <span className="drive-email">{drive.email}</span>
                 <button className="btn btn-ghost header-quiet" onClick={() => disconnectGoogle().then(() => setDrive((current) => ({ ...current, connected: false, email: '' }))).then(reload)}>
@@ -170,18 +214,26 @@ export default function App() {
                 Connect Gmail
               </button>
             )}
-            <button className="btn btn-ghost logout-btn" onClick={handleLogout}>
+            <button className="btn btn-ghost logout-btn" onClick={handleLogout} aria-label="Logout" title="Logout">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 7V5a1 1 0 0 1 1-1h8v16h-8a1 1 0 0 1-1-1v-2" /><path d="M4 12h11M12 8l4 4-4 4" /></svg>
-              Logout
+              <span className="btn-label">Logout</span>
             </button>
           </div>
         </div>
-        <nav className="tabs" aria-label="Sections">
+        <nav className="tabs" aria-label="Sections" ref={tabsRef}>
+          {indicator && (
+            <span
+              className="tab-indicator"
+              aria-hidden="true"
+              style={{ width: indicator.width, transform: `translateX(${indicator.left}px)` }}
+            />
+          )}
           {TABS.map((t) => (
             <button
               key={t.key}
               className={`tab-btn${tab === t.key ? ' tab-btn-active' : ''}`}
-              onClick={() => setTab(t.key)}
+              onClick={() => changeTab(t.key)}
+              aria-current={tab === t.key ? 'page' : undefined}
             >
               <span className="tab-icon">{t.icon}</span>
               {t.label}
@@ -189,6 +241,7 @@ export default function App() {
           ))}
         </nav>
       </header>
+      </div>
 
       <main className="app-main">
         {offline && (
@@ -236,14 +289,23 @@ export default function App() {
         {loading ? (
           <div className="empty-state">Loading...</div>
         ) : (
-          <>
+          <div className="tab-panel" key={tab}>
             {tab === 'overview' && <OverviewTab entries={entries} groups={groups} />}
             {tab === 'groups' && <GroupsTab groups={groups} entries={entries} reload={reload} />}
             {tab === 'entries' && <EntriesTab entries={entries} notes={notes} groups={groups} reload={reload} />}
             {tab === 'notes' && <NotesTab notes={notes} entries={entries} reload={reload} />}
-          </>
+          </div>
         )}
       </main>
+      <button
+        type="button"
+        className={`to-top${showTop ? ' is-visible' : ''}`}
+        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+        aria-label="Back to top"
+        tabIndex={showTop ? 0 : -1}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+      </button>
       <footer className="app-footer">
         <span>Made with <span className="heart" aria-label="love">&#10084;</span> by Akash</span>
         <span className="app-version">v{__APP_VERSION__}</span>

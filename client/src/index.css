@@ -85,11 +85,37 @@ body::after {
 
 /* Header */
 
-.app-header {
+/* The pinned area reaches the top edge and has its own frosted backdrop,
+   so scrolled content passes cleanly underneath instead of showing around it. */
+.app-top {
   position: sticky;
-  top: 0.75rem;
-  z-index: 10;
-  margin: 0.75rem 1rem 0;
+  top: 0;
+  z-index: 20;
+  padding: 0.75rem 1rem 1.1rem;
+  transition: transform 0.35s cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+
+.app-top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, #0a0f1d 0%, rgba(11, 16, 30, 0.96) 55%, rgba(12, 17, 32, 0.8) 85%, rgba(12, 17, 32, 0) 100%);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 1.1rem), transparent);
+  mask-image: linear-gradient(180deg, #000 calc(100% - 1.1rem), transparent);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+
+.app-top.is-scrolled::before { opacity: 1; }
+
+.app-header {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  transition: padding 0.3s ease, box-shadow 0.3s ease;
   padding: 0.85rem 0.9rem 0.75rem;
   border-radius: 22px;
   border: 1px solid rgba(186, 198, 255, 0.16);
@@ -127,6 +153,26 @@ body::after {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.15rem 0.45rem 0.7rem;
+  transition: opacity 0.25s ease;
+}
+
+.is-scrolled .app-header {
+  padding-top: 0.6rem;
+  padding-bottom: 0.55rem;
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* Scrolling down slides the brand row out of view and keeps the tabs; scrolling
+   up brings it back. It moves rather than collapses so the page never jumps. */
+.app-top.is-condensed {
+  transform: translateY(calc(-1 * var(--brand-row-height, 0px) - 0.75rem));
+}
+
+.is-condensed .app-header-row {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .brand {
@@ -251,6 +297,8 @@ body::after {
 }
 
 .tab-btn {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 0.45rem;
@@ -282,8 +330,25 @@ body::after {
 .tab-btn-active {
   color: #ffffff;
   font-weight: 650;
+}
+
+.tab-btn-active:hover {
+  background: transparent;
+  transform: none;
+}
+
+/* One highlight that glides to whichever tab is active. */
+.tab-indicator {
+  position: absolute;
+  top: 0.28rem;
+  bottom: 0.28rem;
+  left: 0;
+  z-index: 0;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(129, 140, 248, 0.42), rgba(79, 70, 229, 0.28));
   box-shadow: 0 0 0 1px rgba(199, 210, 254, 0.35), 0 8px 18px rgba(79, 70, 229, 0.28);
+  transition: transform 0.38s cubic-bezier(0.22, 0.9, 0.3, 1), width 0.38s cubic-bezier(0.22, 0.9, 0.3, 1);
+  pointer-events: none;
 }
 
 @keyframes header-in {
@@ -307,7 +372,8 @@ body::after {
 }
 
 @media (max-width: 720px) {
-  .app-header { margin: 0.5rem 0.5rem 0; top: 0.5rem; }
+  .app-top { padding: 0.5rem 0.5rem 0.9rem; }
+  .brand-copy h1 { white-space: nowrap; }
   .app-header-row { align-items: flex-start; }
   .header-actions { flex-wrap: wrap; justify-content: flex-end; }
   .brand-copy p { display: none; }
@@ -321,6 +387,15 @@ body::after {
   .header-connect::after,
   .drive-dot { animation: none; }
   .tab-btn:hover { transform: none; }
+  .app-header,
+  .app-top,
+  .app-header-row,
+  .app-top::before,
+  .tab-indicator,
+  .tab-panel,
+  .to-top,
+  .btn { transition: none; animation: none; }
+  .btn:hover:not(:disabled) { transform: none; }
 }
 
 .app-main {
@@ -635,9 +710,9 @@ tbody tr:last-child td { border-bottom: none; }
 .row-overdue td:first-child { box-shadow: inset 3px 0 0 #f87171; }
 
 .actions-head { text-align: right; }
+/* Stays a real table cell so it matches the row height and border. */
 .actions-cell {
-  display: flex;
-  justify-content: flex-end;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -1136,4 +1211,78 @@ tbody tr:last-child td { border-bottom: none; }
 .app-version {
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
+}
+
+/* Motion and feedback */
+
+.tab-panel {
+  animation: panel-in 0.38s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+
+:focus-visible {
+  outline: 2px solid var(--primary-light);
+  outline-offset: 2px;
+}
+
+.to-top {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid rgba(199, 210, 254, 0.3);
+  border-radius: 50%;
+  background: var(--gradient-primary);
+  color: #fff;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(12px) scale(0.9);
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease, box-shadow 0.2s ease;
+}
+
+.to-top.is-visible {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.to-top:hover { box-shadow: var(--shadow-lg); }
+
+.to-top svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Narrow phones: keep the top row on one line. The green dot still shows
+   Drive is connected (the address is in its tooltip), and Logout is icon-only. */
+@media (max-width: 520px) {
+  .app-header-row { align-items: center; }
+  .header-actions { flex-wrap: nowrap; gap: 0.4rem; }
+  .drive-email,
+  .logout-btn .btn-label { display: none; }
+  .drive-chip { padding-left: 0.6rem; }
+  .header-actions { flex-shrink: 0; }
+  .brand { gap: 0.55rem; }
+  .brand-logo { width: 36px; height: 36px; border-radius: 12px; }
+  .brand-copy { min-width: 0; }
+  .brand-copy h1 { font-size: 1rem; overflow: hidden; text-overflow: ellipsis; }
+  .logout-btn { padding-left: 0.7rem; padding-right: 0.7rem; }
 }
