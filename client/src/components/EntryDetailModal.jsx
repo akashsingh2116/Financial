@@ -1,26 +1,10 @@
-import { useState } from 'react';
-import { openDocument } from '../api';
+import DocumentPreview from './DocumentPreview';
 import { daysUntil, formatDateTime, formatMoney } from '../format';
 
 export default function EntryDetailModal({ entry, notes, onClose, onEdit }) {
-  const [docError, setDocError] = useState('');
-  const [opening, setOpening] = useState(false);
-
   const days = daysUntil(entry.date_of_maturity);
   const gain = Number(entry.maturity_amount || 0) - Number(entry.amount || 0);
   const active = entry.status === 'active';
-
-  async function handleOpenDocument() {
-    setDocError('');
-    setOpening(true);
-    try {
-      await openDocument(entry.id);
-    } catch (err) {
-      setDocError(err.message || 'Could not open document');
-    } finally {
-      setOpening(false);
-    }
-  }
 
   return (
     <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -64,13 +48,10 @@ export default function EntryDetailModal({ entry, notes, onClose, onEdit }) {
         <div className="detail-block">
           <span className="detail-label">Document</span>
           {entry.document_path ? (
-            <button type="button" className="link-btn" disabled={opening} onClick={handleOpenDocument}>
-              {opening ? 'Opening...' : `📎 ${entry.document_original_name || 'View document'}`}
-            </button>
+            <DocumentPreview entryId={entry.id} name={entry.document_original_name} />
           ) : (
             <div className="detail-value">No document attached</div>
           )}
-          {docError && <div className="form-error">{docError}</div>}
         </div>
 
         <div className="detail-block">

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PRODUCT_TYPES, STATUS_OPTIONS, PREMIUM_FREQUENCIES } from '../constants';
-import { openDocument } from '../api';
+import DocumentPreview from './DocumentPreview';
 import { calculateMaturityAmount } from '../interest';
 
 const EMPTY_FORM = {
@@ -259,16 +259,11 @@ function update(field, value) {
 
           <Field label="Document (image or PDF)">
             <input type="file" accept="image/*,application/pdf" onChange={handleFileChange} />
+            {file && <DocumentPreview file={file} />}
             {isEdit && entry?.document_path && !file && !removeDocument && (
               <div className="existing-doc">
-                <button
-                  type="button"
-                  className="link-btn"
-                  onClick={() => openDocument(entry.id).catch((err) => setSubmitError(err.message))}
-                >
-                  📎 {entry.document_original_name || 'View current document'}
-                </button>
-                <button type="button" className="link-btn danger" onClick={() => setRemoveDocument(true)}>Remove</button>
+                <DocumentPreview entryId={entry.id} name={entry.document_original_name} />
+                <button type="button" className="link-btn danger" onClick={() => setRemoveDocument(true)}>Remove document</button>
               </div>
             )}
             {removeDocument && <div className="hint">Document will be removed on save.</div>}

@@ -242,7 +242,9 @@ app.get('/api/entries/:id/document', async (req, res, next) => {
   if (!opened) return res.status(404).json({ error: 'Document not found' });
 
   const filename = path.basename(row.document_path);
-  const ext = path.extname(filename).toLowerCase();
+  // Files kept in Google Drive are stored by id with no extension, so fall
+  // back to the uploaded name; otherwise browsers cannot show the preview.
+  const ext = (path.extname(filename) || path.extname(row.document_original_name || '')).toLowerCase();
   const safeName = String(row.document_original_name || filename).replace(/["\r\n]/g, '');
   res.setHeader('Content-Type', MIME_BY_EXT[ext] || 'application/octet-stream');
   res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);

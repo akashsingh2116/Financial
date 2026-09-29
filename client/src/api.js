@@ -341,13 +341,6 @@ async function mergedList(kind, path) {
   }
 }
 
-function openBlob(file) {
-  const blob = file.blob instanceof Blob ? file.blob : new Blob([file.blob], { type: file.type });
-  const url = URL.createObjectURL(blob);
-  window.open(url, '_blank', 'noopener');
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
 // ---------- Entries ----------
 
 export function listEntries() {
@@ -429,14 +422,31 @@ export function deleteEntry(id) {
   });
 }
 
-export async function openDocument(id) {
+const TYPE_BY_EXT = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf',
+};
+
+// Older responses were sent as a generic download; use the file name to know
+// it is an image or PDF so it can still be previewed.
+function withType(blob, name) {
+  const ext = String(name || '').split('.').pop().toLowerCase();
+  const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : TYPE_BY_EXT[ext];
+  return type && type !== blob.type ? new Blob([blob], { type }) : blob;
+}
+
+// Loads an entry's document for previewing: from this device when it has not
+// synced yet, otherwise from the server.
+export async function loadDocument(id, name) {
   const queued = [...await loadOps()].reverse().find((op) => (
     op.kind === 'entry' && op.file && (String(op.localId) === String(id) || String(op.targetId) === String(id))
   ));
+  const fromDevice = () => {
+    const blob = queued.file.blob instanceof Blob ? queued.file.blob : new Blob([queued.file.blob], { type: queued.file.type });
+    return { blob: withType(blob, queued.file.name), name: queued.file.name };
+  };
   if (isLocalId(id)) {
     if (!queued?.file) throw new Error('That document is not on this device yet.');
-    openBlob(queued.file);
-    return;
+    return fromDevice();
   }
   try {
     if (!navigator.onLine) throw offlineError();
@@ -448,15 +458,11 @@ export async function openDocument(id) {
     }
     if (!res.ok) {
       const data = await parseBody(res);
-      throw new Error(data?.error || 'Could not open document');
+      throw new Error(data?.error || 'Could not load the document');
     }
-    const blob = await res.blob();
-    openBlob({ blob, name: 'document', type: blob.type });
+    return { blob: withType(await res.blob(), name), name: name || 'document' };
   } catch (error) {
-    if (error.offline && queued?.file) {
-      openBlob(queued.file);
-      return;
-    }
+    if (error.retry && queued?.file) return fromDevice();
     if (error.offline) throw new Error('This document needs a connection.');
     throw error;
   }
