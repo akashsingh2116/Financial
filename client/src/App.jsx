@@ -1,16 +1,40 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import LoginPage from './components/LoginPage';
 import OverviewTab from './components/OverviewTab';
 import EntriesTab from './components/EntriesTab';
 import NotesTab from './components/NotesTab';
 import GroupsTab from './components/GroupsTab';
-import { listEntries, listGroups, listNotes, getToken, logout, googleStatus, startGoogleConnect, disconnectGoogle } from './api';
+import { listEntries, listGroups, listNotes, getToken, logout, googleStatus, startGoogleConnect, disconnectGoogle, syncNow, retryFailed, discardFailed } from './api';
 
 const TABS = [
-  { key: 'overview', label: 'Overview', icon: '📊' },
-  { key: 'groups', label: 'Groups', icon: '🗂️' },
-  { key: 'entries', label: 'Finance Entries', icon: '📁' },
-  { key: 'notes', label: 'Notes', icon: '📝' },
+  {
+    key: 'overview',
+    label: 'Overview',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16M8 16v-4M12 16V8M16 16v-6" /></svg>
+    ),
+  },
+  {
+    key: 'groups',
+    label: 'Groups',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Z" /></svg>
+    ),
+  },
+  {
+    key: 'entries',
+    label: 'Finance Entries',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M3 10h18M7 15h4" /></svg>
+    ),
+  },
+  {
+    key: 'notes',
+    label: 'Notes',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7.5L20 9v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1Z" /><path d="M14 3.5V9h6M9 13h6M9 17h4" /></svg>
+    ),
+  },
 ];
 
 export default function App() {
@@ -24,6 +48,8 @@ export default function App() {
   const [offline, setOffline] = useState(() => !navigator.onLine);
   const [pending, setPending] = useState(0);
   const [syncError, setSyncError] = useState('');
+  const [failed, setFailed] = useState([]);
+  const pendingRef = useRef(0);
   const [drive, setDrive] = useState({ configured: false, connected: false, email: '' });
   const [driveError, setDriveError] = useState('');
 
@@ -55,9 +81,17 @@ export default function App() {
 
   useEffect(() => {
     function onStatus(event) {
-      setOffline(event.detail.offline);
-      setPending(event.detail.pending);
-      setSyncError(event.detail.error || '');
+      const { offline: isOffline, pending: waiting, error: message, failed: refused } = event.detail;
+      setOffline(isOffline);
+      setPending(waiting);
+      setSyncError(message || '');
+      setFailed(refused || []);
+      // Everything saved on this device just reached the server: show the synced records.
+      if (pendingRef.current > 0 && waiting === 0 && !isOffline && getToken()) reload();
+      pendingRef.current = waiting;
+    }
+    function onVisible() {
+      if (document.visibilityState === 'visible' && getToken()) syncNow();
     }
     function onOffline() {
       setOffline(true);
@@ -68,7 +102,9 @@ export default function App() {
     window.addEventListener('sync:status', onStatus);
     window.addEventListener('offline', onOffline);
     window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
+      document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('sync:status', onStatus);
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', onOnline);
@@ -83,11 +119,13 @@ export default function App() {
     if (!token) return undefined;
     const params = new URLSearchParams(window.location.search);
     const google = params.get('google');
+    const reason = params.get('reason');
     if (google) {
       params.delete('google');
+      params.delete('reason');
       const next = params.toString();
       window.history.replaceState({}, '', next ? `?${next}` : window.location.pathname);
-      setDriveError(google === 'connected' ? '' : 'Google Drive was not connected. Approve access on Google and try again.');
+      setDriveError(google === 'connected' ? '' : (reason || 'Google Drive was not connected. Approve access on Google and try again.'));
     }
     googleStatus().then(setDrive).catch((err) => setDriveError(err.message));
     return undefined;
@@ -107,38 +145,45 @@ export default function App() {
       <header className="app-header">
         <div className="app-header-row">
           <div className="brand">
-            <span className="brand-logo">💰</span>
-            <h1>Finance Tracker</h1>
+            <span className="brand-logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3v18M7 7.5h7.5a2.5 2.5 0 0 1 0 5H9.5a2.5 2.5 0 0 0 0 5H17" /></svg>
+            </span>
+            <div className="brand-copy">
+              <h1>Finance Tracker</h1>
+              <p>Personal ledger</p>
+            </div>
           </div>
           <div className="header-actions">
             {drive.connected ? (
               <div className="drive-chip">
-                <span>{drive.email}</span>
-                <button className="btn btn-ghost" onClick={() => disconnectGoogle().then(() => setDrive((current) => ({ ...current, connected: false, email: '' }))).then(reload)}>
+                <span className="drive-dot" aria-hidden="true" />
+                <span className="drive-email">{drive.email}</span>
+                <button className="btn btn-ghost header-quiet" onClick={() => disconnectGoogle().then(() => setDrive((current) => ({ ...current, connected: false, email: '' }))).then(reload)}>
                   Disconnect
                 </button>
               </div>
             ) : (
               <button
-                className="btn btn-primary"
+                className="btn btn-primary header-connect"
                 onClick={() => startGoogleConnect().catch((err) => setDriveError(err.message))}
               >
                 Connect Gmail
               </button>
             )}
             <button className="btn btn-ghost logout-btn" onClick={handleLogout}>
-              <span aria-hidden="true">⏻</span> Logout
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 7V5a1 1 0 0 1 1-1h8v16h-8a1 1 0 0 1-1-1v-2" /><path d="M4 12h11M12 8l4 4-4 4" /></svg>
+              Logout
             </button>
           </div>
         </div>
-        <nav className="tabs">
+        <nav className="tabs" aria-label="Sections">
           {TABS.map((t) => (
             <button
               key={t.key}
               className={`tab-btn${tab === t.key ? ' tab-btn-active' : ''}`}
               onClick={() => setTab(t.key)}
             >
-              <span className="tab-icon" aria-hidden="true">{t.icon}</span>
+              <span className="tab-icon">{t.icon}</span>
               {t.label}
             </button>
           ))}
@@ -157,6 +202,25 @@ export default function App() {
           </div>
         )}
         {syncError && <div className="banner banner-error">{syncError}</div>}
+        {failed.length > 0 && (
+          <div className="banner banner-error banner-actions">
+            <span>
+              {failed.length} saved {failed.length === 1 ? 'change was' : 'changes were'} not accepted: {failed[0].reason}
+            </span>
+            <span className="banner-buttons">
+              <button type="button" className="btn btn-ghost" onClick={() => retryFailed().then(reload)}>Retry</button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  if (window.confirm('Discard the changes that could not be saved? This cannot be undone.')) discardFailed().then(reload);
+                }}
+              >
+                Discard
+              </button>
+            </span>
+          </div>
+        )}
         {driveError && <div className="banner banner-error">{driveError}</div>}
         {!drive.connected && !loading && (
           <div className="banner">

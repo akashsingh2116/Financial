@@ -1,4 +1,4 @@
-import { loadOps, loadSnapshot, saveOps, saveSnapshot } from './offlineDb';
+import { loadFailed, loadOps, loadSnapshot, saveFailed, saveOps, saveSnapshot } from './offlineDb';
 import {
   applyServerId,
   canSend,
@@ -40,11 +40,17 @@ async function handle(res) {
   if (res.status === 401) {
     setToken(null);
     window.dispatchEvent(new Event('auth:unauthorized'));
-    throw new Error('Session expired. Please log in again.');
+    const error = new Error('Session expired. Please log in again.');
+    error.auth = true;
+    throw error;
   }
   const data = await parseBody(res);
   if (!res.ok) {
-    throw new Error(data?.error || `Request failed with status ${res.status}`);
+    const error = new Error(data?.error || `Request failed with status ${res.status}`);
+    error.status = res.status;
+    // Server or Google Drive trouble: keep the change on this device and try again later.
+    error.retry = res.status >= 500 || res.status === 408 || res.status === 429;
+    throw error;
   }
   return data;
 }
@@ -103,24 +109,55 @@ function locked(fn) {
   return run;
 }
 
+const REQUEST_TIMEOUT_MS = 30000;
+const UPLOAD_TIMEOUT_MS = 120000;
+const RETRY_MIN_MS = 5000;
+const RETRY_MAX_MS = 5 * 60 * 1000;
+
 function offlineError() {
   const error = new Error('No connection. The change is saved on this device.');
   error.offline = true;
+  error.retry = true;
   return error;
 }
 
-async function send(url, options) {
+// Every request has a time limit, so a slow server cannot leave a save hanging.
+async function send(url, options = {}) {
+  const timeout = options.body instanceof FormData ? UPLOAD_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   try {
-    return await fetch(url, options);
-  } catch {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(timeout) });
+  } catch (error) {
+    if (error?.name === 'TimeoutError') {
+      const slow = new Error('The server is taking too long. The change is saved on this device.');
+      slow.retry = true;
+      throw slow;
+    }
     throw offlineError();
   }
 }
 
+let retryTimer = null;
+let retryDelay = RETRY_MIN_MS;
+
+function scheduleRetry() {
+  if (retryTimer) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    syncNow();
+  }, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
+}
+
 async function publishStatus(offline = !navigator.onLine) {
   const ops = await loadOps();
+  const failed = await loadFailed();
   window.dispatchEvent(new CustomEvent('sync:status', {
-    detail: { offline, pending: ops.length, error: lastSyncError },
+    detail: {
+      offline,
+      pending: ops.length,
+      error: lastSyncError,
+      failed: failed.map((op) => ({ id: op.id, kind: op.kind, action: op.action, reason: op.reason })),
+    },
   }));
 }
 
@@ -165,7 +202,7 @@ async function sendOp(op) {
   if (op.kind === 'group' && op.action === 'create') {
     const created = await handle(await send(`${BASE}/groups`, {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: authHeaders({ 'Content-Type': 'application/json', 'X-Op-Id': op.id }),
       body: JSON.stringify({ name: op.record.name }),
     }));
     const rest = applyServerId((await loadOps()).filter((item) => item.id !== op.id), op.localId, created.id);
@@ -184,7 +221,7 @@ async function sendOp(op) {
   } else if (op.kind === 'entry' && op.action === 'create') {
     const created = await handle(await send(`${BASE}/entries`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: authHeaders({ 'X-Op-Id': op.id }),
       body: entryFormData(op),
     }));
     const rest = applyServerId((await loadOps()).filter((item) => item.id !== op.id), op.localId, created.id);
@@ -203,7 +240,7 @@ async function sendOp(op) {
   } else if (op.kind === 'note' && op.action === 'create') {
     await handle(await send(`${BASE}/notes`, {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: authHeaders({ 'Content-Type': 'application/json', 'X-Op-Id': op.id }),
       body: JSON.stringify(notePayload(op.record)),
     }));
   } else if (op.kind === 'note' && op.action === 'update') {
@@ -219,6 +256,21 @@ async function sendOp(op) {
   await saveOps((await loadOps()).filter((item) => item.id !== op.id));
 }
 
+function dependsOn(op, localId) {
+  if (!localId) return false;
+  return [op.targetId, op.localId, op.record?.entry_id, op.record?.group_id]
+    .some((value) => String(value) === String(localId));
+}
+
+// A change the server refuses outright (for example a file that is too large)
+// is set aside with its reason instead of blocking every change behind it.
+async function setAside(op, reason) {
+  const ops = await loadOps();
+  const moved = ops.filter((item) => item.id === op.id || (op.action === 'create' && dependsOn(item, op.localId)));
+  await saveOps(ops.filter((item) => !moved.includes(item)));
+  await saveFailed([...await loadFailed(), ...moved.map((item) => ({ ...item, reason }))]);
+}
+
 async function flushUnlocked() {
   if (!authToken || !navigator.onLine) {
     await publishStatus();
@@ -232,16 +284,45 @@ async function flushUnlocked() {
     try {
       await sendOp(op);
       lastSyncError = '';
+      retryDelay = RETRY_MIN_MS;
       ops = await loadOps();
     } catch (error) {
-      if (!error.offline && !/session expired/i.test(error.message || '')) {
-        lastSyncError = error.message || 'Could not sync saved changes';
+      if (error.auth) {
+        await publishStatus(false);
+        return;
       }
-      await publishStatus(Boolean(error.offline));
-      return;
+      if (error.retry) {
+        if (!error.offline) lastSyncError = `${error.message} Saved changes will be retried automatically.`;
+        await publishStatus(Boolean(error.offline));
+        scheduleRetry();
+        return;
+      }
+      await setAside(op, error.message || 'The server did not accept this change');
+      ops = await loadOps();
     }
   }
   await publishStatus(false);
+}
+
+// Sends any changes saved on this device. Safe to call at any time.
+export function syncNow() {
+  return locked(flushUnlocked).catch(() => {});
+}
+
+export function retryFailed() {
+  return locked(async () => {
+    const failed = await loadFailed();
+    await saveFailed([]);
+    await saveOps([...await loadOps(), ...failed.map(({ reason, ...op }) => op)]);
+    await flushUnlocked();
+  });
+}
+
+export function discardFailed() {
+  return locked(async () => {
+    await saveFailed([]);
+    await publishStatus();
+  });
 }
 
 async function mergedList(kind, path) {
@@ -253,7 +334,7 @@ async function mergedList(kind, path) {
     await publishStatus(false);
     return merged;
   } catch (error) {
-    if (!error.offline && navigator.onLine) throw error;
+    if (!error.retry) throw error;
     const merged = mergeRecords(await loadSnapshot(kind), await loadOps(), kind);
     await publishStatus(true);
     return merged;
@@ -276,17 +357,18 @@ export function listEntries() {
 export function createEntry(formData) {
   return locked(async () => {
     const parsed = readFormData(formData);
+    const opId = crypto.randomUUID();
     if (navigator.onLine) {
       try {
-        return await handle(await send(`${BASE}/entries`, { method: 'POST', headers: authHeaders(), body: formData }));
+        return await handle(await send(`${BASE}/entries`, { method: 'POST', headers: authHeaders({ 'X-Op-Id': opId }), body: formData }));
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     const localId = newLocalId();
     const record = entryRecord(localId, parsed, null);
     await remember({
-      id: crypto.randomUUID(),
+      id: opId,
       kind: 'entry',
       action: 'create',
       localId,
@@ -306,7 +388,7 @@ export function updateEntry(id, formData) {
       try {
         return await handle(await send(`${BASE}/entries/${id}`, { method: 'PUT', headers: authHeaders(), body: formData }));
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     const existing = mergeRecords(await loadSnapshot('entry'), await loadOps(), 'entry')
@@ -334,7 +416,7 @@ export function deleteEntry(id) {
         await handle(await send(`${BASE}/entries/${id}`, { method: 'DELETE', headers: authHeaders() }));
         return;
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     await remember({
@@ -388,21 +470,22 @@ export function listNotes() {
 
 export function createNote(data) {
   return locked(async () => {
+    const opId = crypto.randomUUID();
     if (navigator.onLine && !isLocalId(data.entry_id)) {
       try {
         return await handle(await send(`${BASE}/notes`, {
           method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          headers: authHeaders({ 'Content-Type': 'application/json', 'X-Op-Id': opId }),
           body: JSON.stringify({ ...data, entry_id: data.entry_id ? Number(data.entry_id) : null }),
         }));
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     const localId = newLocalId();
     const record = noteRecord(localId, data, null);
     await remember({
-      id: crypto.randomUUID(),
+      id: opId,
       kind: 'note',
       action: 'create',
       localId,
@@ -424,7 +507,7 @@ export function updateNote(id, data) {
           body: JSON.stringify({ ...data, entry_id: data.entry_id ? Number(data.entry_id) : null }),
         }));
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     const existing = mergeRecords(await loadSnapshot('note'), await loadOps(), 'note')
@@ -448,15 +531,16 @@ export function listGroups() {
 
 export function createGroup(name) {
   return locked(async () => {
+    const opId = crypto.randomUUID();
     if (navigator.onLine) {
       try {
         return await handle(await send(`${BASE}/groups`, {
           method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          headers: authHeaders({ 'Content-Type': 'application/json', 'X-Op-Id': opId }),
           body: JSON.stringify({ name }),
         }));
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     const localId = newLocalId();
@@ -468,7 +552,7 @@ export function createGroup(name) {
       updated_at: new Date().toISOString(),
     };
     await remember({
-      id: crypto.randomUUID(),
+      id: opId,
       kind: 'group',
       action: 'create',
       localId,
@@ -490,7 +574,7 @@ export function updateGroup(id, name) {
           body: JSON.stringify({ name }),
         }));
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     const existing = mergeRecords(await loadSnapshot('group'), await loadOps(), 'group')
@@ -521,7 +605,7 @@ export function deleteGroup(id) {
         await handle(await send(`${BASE}/groups/${id}`, { method: 'DELETE', headers: authHeaders() }));
         return;
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     await remember({
@@ -541,7 +625,7 @@ export function deleteNote(id) {
         await handle(await send(`${BASE}/notes/${id}`, { method: 'DELETE', headers: authHeaders() }));
         return;
       } catch (error) {
-        if (!error.offline) throw error;
+        if (!error.retry) throw error;
       }
     }
     await remember({

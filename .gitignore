@@ -6,7 +6,7 @@ server/finance.db-wal
 server/finance.db-shm
 server/backups/
 client/dist/
-public/
+/public/
 .vercel/
 
 .vercel

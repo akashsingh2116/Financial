@@ -57,3 +57,25 @@ export function saveSnapshot(name, rows) {
     store.put(rows, name);
   });
 }
+
+// Changes the server refused, kept with the reason so they can be retried or discarded.
+export function loadFailed() {
+  return withStore('outbox', 'readonly', (store) => requestToPromise(store.get('failed'))).then((ops) => ops || []);
+}
+
+export function saveFailed(ops) {
+  return withStore('outbox', 'readwrite', (store) => {
+    store.put(ops, 'failed');
+  });
+}
+
+// Asks the browser not to clear saved changes when the device runs low on space.
+export async function keepStorage() {
+  try {
+    if (navigator.storage?.persisted && !(await navigator.storage.persisted())) {
+      await navigator.storage.persist();
+    }
+  } catch {
+    // Not supported: saved changes still work, the browser just may clear them under pressure.
+  }
+}

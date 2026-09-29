@@ -157,7 +157,8 @@ app.get('/api/google/callback', async (req, res) => {
     res.redirect(`${back}/?google=connected`);
   } catch (error) {
     console.error('Google connect failed:', error.message);
-    res.redirect(`${back}/?google=error`);
+    const reason = encodeURIComponent(String(error.message || '').slice(0, 300));
+    res.redirect(`${back}/?google=error&reason=${reason}`);
   }
 });
 
@@ -184,12 +185,18 @@ app.get('/api/groups', async (req, res) => {
   res.json(await store.listGroups());
 });
 
+// Sent by the browser with each create so a repeated request is saved only once.
+function opId(req) {
+  const value = String(req.get('x-op-id') || '');
+  return /^[w-]{8,64}$/.test(value) ? value : null;
+}
+
 app.post('/api/groups', async (req, res) => {
   const name = cleanGroupName(req.body?.name);
   if (!name) return res.status(400).json({ error: 'Group name is required' });
   if (name.length > 80) return res.status(400).json({ error: 'Group name must be 80 characters or less' });
   try {
-    res.status(201).json(await store.createGroup(name));
+    res.status(201).json(await store.createGroup(name, opId(req)));
   } catch (err) {
     if (!rejectConflict(err, res)) throw err;
   }
@@ -259,7 +266,9 @@ app.post('/api/entries', upload.single('document'), async (req, res) => {
       ...row,
       document_path: documentPath,
       document_original_name: req.file ? req.file.originalname : null,
-    });
+    }, opId(req));
+    // A repeated request returns the first record; drop the second copy of its file.
+    if (documentPath && created.document_path !== documentPath) await store.removeFile(documentPath);
     res.status(201).json(created);
   } catch (err) {
     if (documentPath) await store.removeFile(documentPath);
@@ -337,7 +346,7 @@ app.post('/api/notes', async (req, res) => {
     return res.status(400).json({ error: 'Linked entry does not exist' });
   }
 
-  const created = await store.createNote({ title, content, entry_id: entryId });
+  const created = await store.createNote({ title, content, entry_id: entryId }, opId(req));
   res.status(201).json(created);
 });
 
@@ -366,11 +375,11 @@ app.delete('/api/notes/:id', async (req, res) => {
 // ---------- Error handling ----------
 
 app.use((err, req, res, next) => {
-  const clientError = err instanceof multer.MulterError || err.status === 400;
-  if (!clientError) console.error(err);
-  const status = clientError ? 400 : 500;
-  res.status(status).json({
-    error: clientError ? err.message : 'Something went wrong',
+  const status = err instanceof multer.MulterError ? 400 : (Number(err.status) || 500);
+  if (status >= 500) console.error(err);
+  const safeStatus = status >= 400 && status < 600 ? status : 500;
+  res.status(safeStatus).json({
+    error: err.status || err instanceof multer.MulterError ? err.message : 'Something went wrong',
   });
 });
 

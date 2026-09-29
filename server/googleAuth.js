@@ -11,6 +11,8 @@ const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
 ].join(' ');
 
+const GOOGLE_TIMEOUT_MS = 15000;
+
 let session = null;
 let access = { token: '', exp: 0 };
 
@@ -71,27 +73,62 @@ function firestore() {
 async function readTokenCloud() {
   const db = firestore();
   if (!db) return null;
-  const snap = await db.collection('meta').doc('googleDrive').get();
-  return snap.exists ? snap.data() : null;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Firestore did not respond')), GOOGLE_TIMEOUT_MS);
+  });
+  try {
+    const snap = await Promise.race([db.collection('meta').doc('googleDrive').get(), timeout]);
+    return snap.exists ? snap.data() : null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function writeSession(next) {
   session = next;
   access = { token: '', exp: 0 };
-  const body = JSON.stringify(next, null, 2);
-  await fs.promises.writeFile(TOKEN_PATH, body);
-  const db = firestore();
-  if (db) await db.collection('meta').doc('googleDrive').set(next);
+  try {
+    await fs.promises.writeFile(TOKEN_PATH, JSON.stringify(next, null, 2));
+  } catch (error) {
+    console.error('Could not save the Google session file:', error.message);
+  }
+  try {
+    const db = firestore();
+    if (db) await db.collection('meta').doc('googleDrive').set(next);
+  } catch (error) {
+    console.error('Could not save the Google session:', error.message);
+  }
 }
 
-const ready = (async () => {
+let loadError = null;
+
+async function loadSession() {
   try {
     session = readTokenFile() || await readTokenCloud();
+    loadError = null;
   } catch (error) {
     console.error('Google Drive session was not loaded:', error.message);
+    loadError = error;
     session = readTokenFile();
   }
-})();
+}
+
+let loading = loadSession();
+
+// A failed load is retried on the next request instead of leaving this
+// instance on the temporary local store for the rest of its life.
+async function whenReady() {
+  await loading;
+  if (loadError && !hasSession()) {
+    loading = loadSession();
+    await loading;
+  }
+}
+
+function sessionUnavailable() {
+  return Boolean(loadError) && !hasSession();
+}
 
 function createState(redirectUri) {
   const payload = Buffer.from(JSON.stringify({
@@ -143,6 +180,7 @@ async function exchange(code, redirectUri) {
     grant_type: 'authorization_code',
   });
   const response = await fetch('https://oauth2.googleapis.com/token', {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
@@ -157,6 +195,7 @@ async function exchange(code, redirectUri) {
 async function emailFor(accessToken) {
   const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
   });
   const payload = await response.json();
   return payload.email || '';
@@ -183,7 +222,7 @@ async function completeLogin(code, redirectUri) {
 }
 
 async function getAccessToken() {
-  await ready;
+  await whenReady();
   if (!hasSession()) {
     const error = new Error('Connect a Gmail account first');
     error.status = 409;
@@ -197,15 +236,28 @@ async function getAccessToken() {
     refresh_token: session.refresh_token,
     grant_type: 'refresh_token',
   });
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body,
-  });
-  const payload = await response.json();
+  let response;
+  try {
+    response = await fetch('https://oauth2.googleapis.com/token', {
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+  } catch {
+    const error = new Error('Google did not respond. Try again in a moment.');
+    error.status = 503;
+    throw error;
+  }
+  const payload = await response.json().catch(() => ({}));
   if (!payload.access_token) {
-    const error = new Error('Google Drive access expired. Connect Gmail again.');
-    error.status = 401;
+    const expired = payload.error === 'invalid_grant';
+    const error = new Error(expired
+      ? 'Google Drive access expired. Connect Gmail again.'
+      : 'Google did not respond. Try again in a moment.');
+    // Not 401: the browser treats that as its own login expiring. Changes
+    // waiting on this device stay queued until Drive works again.
+    error.status = 503;
     throw error;
   }
   access = { token: payload.access_token, exp: Date.now() + (payload.expires_in || 3600) * 1000 };
@@ -213,7 +265,7 @@ async function getAccessToken() {
 }
 
 async function status() {
-  await ready;
+  await whenReady();
   return {
     configured: isConfigured(),
     connected: hasSession(),
@@ -222,7 +274,7 @@ async function status() {
 }
 
 async function disconnect() {
-  await ready;
+  await whenReady();
   session = null;
   access = { token: '', exp: 0 };
   await fs.promises.rm(TOKEN_PATH, { force: true });
@@ -237,7 +289,8 @@ function rememberDriveIds(folderId, dataFileId) {
 }
 
 module.exports = {
-  ready,
+  get ready() { return whenReady(); },
+  sessionUnavailable,
   isConfigured,
   hasSession,
   createState,
