@@ -5,37 +5,49 @@ const googleAuth = require('./googleAuth');
 const FOLDER_NAME = 'Finance Tracker';
 const DATA_NAME = 'finance-data.json';
 const SHEET_NAME = 'Finance Records';
+const EXCEL_NAME = 'Finance Records.xlsx';
+const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const BACKUP_FOLDER = 'Backups';
 const DOCUMENTS_FOLDER = 'Documents';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const SHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 
+// Columns of the Finance Records sheet and Excel file. `type` sets how the
+// value is stored and shown: text keeps leading zeros, dates are real dates.
 const SHEET_COLUMNS = [
-  ['Group', (entry, groups) => groups.get(Number(entry.group_id)) || ''],
-  ['Serial No', (entry) => entry.serial_no],
-  ['Owner', (entry) => entry.owner_name],
-  ['Product', (entry) => entry.product],
-  ['Issuer', (entry) => entry.issuer],
-  ['Amount', (entry) => entry.amount],
-  ['Interest Rate (%)', (entry) => entry.interest_rate],
-  ['Maturity Amount', (entry) => entry.maturity_amount],
-  ['Date of Issue', (entry) => entry.date_of_issue],
-  ['Date of Maturity', (entry) => entry.date_of_maturity],
-  ['Nominee', (entry) => entry.nominee_name],
-  ['Nominee Relation', (entry) => entry.nominee_relation],
-  ['Premium Frequency', (entry) => entry.premium_frequency],
-  ['Status', (entry) => entry.status],
-  ['Remarks', (entry) => entry.remarks],
-  ['Document', (entry) => (entry.document_path
-    ? { link: `https://drive.google.com/file/d/${entry.document_path}/view`, label: entry.document_original_name || 'Open' }
-    : '')],
-  ['Added', (entry) => entry.created_at],
-  ['Last Updated', (entry) => entry.updated_at],
+  { title: 'Group', type: 'text', pick: (entry, groups) => groups.get(Number(entry.group_id)) || '' },
+  { title: 'Serial No', type: 'text', pick: (entry) => entry.serial_no },
+  { title: 'Owner', type: 'text', pick: (entry) => entry.owner_name },
+  { title: 'Product', type: 'text', pick: (entry) => entry.product },
+  { title: 'Issuer', type: 'text', pick: (entry) => entry.issuer },
+  { title: 'Amount', type: 'money', pick: (entry) => entry.amount },
+  { title: 'Interest Rate (%)', type: 'number', pick: (entry) => entry.interest_rate },
+  { title: 'Maturity Amount', type: 'money', pick: (entry) => entry.maturity_amount },
+  { title: 'Date of Issue', type: 'date', pick: (entry) => entry.date_of_issue },
+  { title: 'Date of Maturity', type: 'date', pick: (entry) => entry.date_of_maturity },
+  { title: 'Nominee', type: 'text', pick: (entry) => entry.nominee_name },
+  { title: 'Nominee Relation', type: 'text', pick: (entry) => entry.nominee_relation },
+  { title: 'Premium Frequency', type: 'text', pick: (entry) => entry.premium_frequency },
+  { title: 'Status', type: 'text', pick: (entry) => entry.status },
+  { title: 'Remarks', type: 'text', pick: (entry) => entry.remarks },
+  {
+    title: 'Document',
+    type: 'link',
+    pick: (entry) => (entry.document_path
+      ? { text: entry.document_original_name || 'Open', hyperlink: `https://drive.google.com/file/d/${entry.document_path}/view` }
+      : ''),
+  },
+  { title: 'Added', type: 'text', pick: (entry) => entry.created_at },
+  { title: 'Last Updated', type: 'text', pick: (entry) => entry.updated_at },
 ];
+
+const HEADER_FILL = 'FFF9CB9C';
+const BORDER_COLOR = 'FFD0D0D0';
 
 let chain = Promise.resolve();
 let cache = null;
 let sheetId = '';
+let excelId = '';
 
 const DRIVE_TIMEOUT_MS = 20000;
 const UPLOAD_TIMEOUT_MS = 60000;
@@ -346,51 +358,118 @@ async function backupBeforeSave(snapshot) {
   lastBackupDay = day;
 }
 
-function csvCell(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object' && value.link) {
-    const label = String(value.label).replace(/"/g, "'");
-    return `"=HYPERLINK(""${value.link}"",""${label}"")"`;
+function cellValue(type, value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (type === 'money' || type === 'number') {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : String(value);
   }
-  if (typeof value === 'number') return String(value);
-  let text = String(value);
-  // Stop typed text such as "=SUM(...)" from being run as a formula in the sheet.
-  if (/^[=+\-@]/.test(text)) text = `'${text}`;
-  return `"${text.replace(/"/g, '""')}"`;
+  if (type === 'date') {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+    return match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : String(value);
+  }
+  if (type === 'link') return value;
+  return String(value);
 }
 
-function recordsCsv(data) {
+function displayLength(value) {
+  if (value instanceof Date) return 10;
+  if (value && typeof value === 'object') return String(value.text).length;
+  if (typeof value === 'number') return value.toLocaleString('en-US', { maximumFractionDigits: 2 }).length + 3;
+  return String(value ?? '').length;
+}
+
+// One formatted workbook is used for both the .xlsx file and the Google Sheet,
+// so the orange header, borders, widths and frozen header survive every save.
+async function recordsWorkbook(data) {
+  const ExcelJS = require('exceljs');
   const groups = new Map(data.groups.map((group) => [Number(group.id), group.name]));
   const entries = [...data.entries].sort((a, b) => (
     String(groups.get(Number(a.group_id)) || '').localeCompare(String(groups.get(Number(b.group_id)) || ''))
     || String(a.date_of_maturity).localeCompare(String(b.date_of_maturity))
   ));
-  const lines = [SHEET_COLUMNS.map(([title]) => csvCell(title)).join(',')];
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Finance Tracker';
+  const sheet = workbook.addWorksheet('Records', { views: [{ state: 'frozen', ySplit: 1 }] });
+  const border = {
+    top: { style: 'thin', color: { argb: BORDER_COLOR } },
+    left: { style: 'thin', color: { argb: BORDER_COLOR } },
+    bottom: { style: 'thin', color: { argb: BORDER_COLOR } },
+    right: { style: 'thin', color: { argb: BORDER_COLOR } },
+  };
+
+  const header = sheet.addRow(SHEET_COLUMNS.map((column) => column.title));
+  header.height = 20;
+  header.eachCell((cell) => {
+    cell.font = { bold: true };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_FILL } };
+    cell.alignment = { vertical: 'middle' };
+    cell.border = border;
+  });
+
+  const widths = SHEET_COLUMNS.map((column) => column.title.length);
   for (const entry of entries) {
-    lines.push(SHEET_COLUMNS.map(([, pick]) => csvCell(pick(entry, groups))).join(','));
+    const values = SHEET_COLUMNS.map((column) => cellValue(column.type, column.pick(entry, groups)));
+    const row = sheet.addRow(values);
+    SHEET_COLUMNS.forEach((column, index) => {
+      const cell = row.getCell(index + 1);
+      cell.border = border;
+      cell.alignment = { vertical: 'middle' };
+      if (column.type === 'money') cell.numFmt = '#,##0.00';
+      if (column.type === 'number') cell.numFmt = '0.00';
+      if (column.type === 'date') cell.numFmt = 'yyyy-mm-dd';
+      if (column.type === 'text') cell.numFmt = '@';
+      if (column.type === 'link' && values[index]) cell.font = { color: { argb: 'FF1155CC' }, underline: true };
+      widths[index] = Math.max(widths[index], displayLength(values[index]));
+    });
   }
-  return lines.join('\r\n');
+
+  SHEET_COLUMNS.forEach((column, index) => {
+    sheet.getColumn(index + 1).width = Math.min(Math.max(widths[index] + 3, 10), 48);
+  });
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: SHEET_COLUMNS.length } };
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
-async function saveRecordsSheet(snapshot) {
-  if (!sheetId) {
-    const query = encodeURIComponent(`name='${SHEET_NAME}' and mimeType='${SHEET_MIME}' and '${snapshot.folderId}' in parents and trashed=false`);
-    const listed = await drive(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id)&pageSize=1`);
-    sheetId = listed.files?.[0]?.id || '';
-  }
-  if (!sheetId) {
-    const created = await drive('https://www.googleapis.com/drive/v3/files', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: SHEET_NAME, parents: [snapshot.folderId], mimeType: SHEET_MIME }),
-    });
-    sheetId = created.id;
-  }
-  await drive(`https://www.googleapis.com/upload/drive/v3/files/${sheetId}?uploadType=media`, {
-    method: 'PATCH',
-    headers: { 'content-type': 'text/csv; charset=utf-8' },
-    body: recordsCsv(snapshot.data),
+async function findOrCreate(snapshot, name, mimeType) {
+  const query = encodeURIComponent(`name='${name}' and mimeType='${mimeType}' and '${snapshot.folderId}' in parents and trashed=false`);
+  const listed = await drive(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id)&pageSize=1`);
+  if (listed.files?.[0]?.id) return listed.files[0].id;
+  const created = await drive('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, parents: [snapshot.folderId], mimeType }),
   });
+  return created.id;
+}
+
+async function uploadWorkbook(fileId, workbook) {
+  await drive(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method: 'PATCH',
+    headers: { 'content-type': EXCEL_MIME },
+    body: workbook,
+  });
+}
+
+// Rewrites the Finance Records Google Sheet and the Finance Records.xlsx file
+// from the records. Either can fail without affecting the other or the save.
+async function saveRecordsSheet(snapshot) {
+  const workbook = await recordsWorkbook(snapshot.data);
+  try {
+    sheetId = sheetId || await findOrCreate(snapshot, SHEET_NAME, SHEET_MIME);
+    await uploadWorkbook(sheetId, workbook);
+  } catch (error) {
+    sheetId = '';
+    console.error('Could not update the Finance Records sheet:', error.message);
+  }
+  try {
+    excelId = excelId || await findOrCreate(snapshot, EXCEL_NAME, EXCEL_MIME);
+    await uploadWorkbook(excelId, workbook);
+  } catch (error) {
+    excelId = '';
+    console.error('Could not update the Finance Records Excel file:', error.message);
+  }
 }
 
 async function saveData(snapshot) {
