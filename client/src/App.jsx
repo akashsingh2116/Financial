@@ -244,6 +244,10 @@ export default function App() {
           </>
         )}
       </main>
+      <footer className="app-footer">
+        <span>Made with <span className="heart" aria-label="love">&#10084;</span> by Akash</span>
+        <span className="app-version">v{__APP_VERSION__}</span>
+      </footer>
     </div>
   );
 }
