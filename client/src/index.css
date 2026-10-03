@@ -1385,3 +1385,5 @@ tbody tr:last-child td { border-bottom: none; }
 @media (prefers-reduced-motion: reduce) {
   .doc-preview-loading { animation: none; }
 }
+
+.nowrap { white-space: nowrap; }

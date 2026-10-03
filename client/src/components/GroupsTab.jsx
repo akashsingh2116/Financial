@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import EntryFormModal from './EntryFormModal';
 import { createEntry, createGroup, deleteGroup, updateEntry, updateGroup } from '../api';
-import { formatMoney } from '../format';
+import { daysUntil, formatDate, formatMoney } from '../format';
 
 const PAGE_SIZE = 50;
 
@@ -176,7 +176,8 @@ export default function GroupsTab({ groups, entries, reload }) {
                             <th>Owner</th>
                             <th>Product</th>
                             <th>Amount</th>
-                            <th>Maturity</th>
+                            <th>Maturity Amount</th>
+                            <th>Maturity Date</th>
                             <th>Status</th>
                             <th></th>
                           </tr>
@@ -189,6 +190,7 @@ export default function GroupsTab({ groups, entries, reload }) {
                               <td>{entry.product}</td>
                               <td>₹{formatMoney(entry.amount)}</td>
                               <td>₹{formatMoney(entry.maturity_amount)}</td>
+                              <td className="nowrap"><MaturityDate entry={entry} /></td>
                               <td><span className={`badge status-${entry.status}`}>{entry.status}</span></td>
                               <td><button type="button" className="link-btn" onClick={() => setModalEntry(entry)}>Edit</button></td>
                             </tr>
@@ -238,5 +240,18 @@ export default function GroupsTab({ groups, entries, reload }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Maturity date with the same "days left" / "overdue" badges as the entries list.
+function MaturityDate({ entry }) {
+  const days = daysUntil(entry.date_of_maturity);
+  const active = entry.status === 'active';
+  return (
+    <>
+      {formatDate(entry.date_of_maturity)}
+      {active && days >= 0 && days <= 90 && <span className="badge badge-warn">{days}d left</span>}
+      {active && days < 0 && <span className="badge badge-danger">{Math.abs(days)}d overdue</span>}
+    </>
   );
 }
