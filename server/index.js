@@ -188,7 +188,7 @@ app.get('/api/groups', async (req, res) => {
 // Sent by the browser with each create so a repeated request is saved only once.
 function opId(req) {
   const value = String(req.get('x-op-id') || '');
-  return /^[w-]{8,64}$/.test(value) ? value : null;
+  return /^[\w-]{8,64}$/.test(value) ? value : null;
 }
 
 app.post('/api/groups', async (req, res) => {
