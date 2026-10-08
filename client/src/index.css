@@ -1398,3 +1398,17 @@ tbody tr:last-child td { border-bottom: none; }
 }
 
 .nowrap { white-space: nowrap; }
+
+.form-warning {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 0.875rem;
+}
+
+.form-warning ul {
+  margin: 0.35rem 0;
+  padding-left: 1.1rem;
+}

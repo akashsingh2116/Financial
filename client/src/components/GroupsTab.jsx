@@ -216,6 +216,7 @@ export default function GroupsTab({ groups, entries, reload }) {
       {modalEntry !== undefined && (
         <EntryFormModal
           entry={modalEntry}
+          entries={entries}
           groups={groups}
           defaultGroupId={modalEntry ? '' : presetGroupId}
           onClose={() => setModalEntry(undefined)}

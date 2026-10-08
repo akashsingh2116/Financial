@@ -311,6 +311,18 @@ async function labelExistingDocuments(snapshot) {
   }
 }
 
+const sameGroupName = (a, b) => String(a).trim().replace(/\s+/g, ' ').toLowerCase() === String(b).trim().replace(/\s+/g, ' ').toLowerCase();
+
+// Checked again inside the lock: two devices saving the same serial at once
+// would both pass the earlier check.
+async function rejectTakenSerial(data, serial, selfId) {
+  if (!serial) return;
+  const { serialKey } = await import('./entryRules.mjs');
+  const key = serialKey(serial);
+  const clash = data.entries.find((entry) => String(entry.id) !== String(selfId) && serialKey(entry.serial_no) === key);
+  if (clash) throw conflict(`Serial ${clash.serial_no} is already saved (owner ${clash.owner_name})`);
+}
+
 // A create sent again (after a timeout, or from the offline queue) returns the
 // record made the first time instead of adding a duplicate.
 function findRepeat(data, kind, opId) {
@@ -576,7 +588,7 @@ const store = {
       const snapshot = await loadData();
       const repeat = findRepeat(snapshot.data, 'group', opId);
       if (repeat) return repeat;
-      if (snapshot.data.groups.some((group) => group.name === name)) throw conflict('A group with that name already exists');
+      if (snapshot.data.groups.some((group) => sameGroupName(group.name, name))) throw conflict('A group with that name already exists');
       const stamp = nowStamp();
       const created = { id: nextId(snapshot.data, 'groups'), name, created_at: stamp, updated_at: stamp };
       snapshot.data.groups.push(created);
@@ -591,7 +603,7 @@ const store = {
       const snapshot = await loadData();
       const group = snapshot.data.groups.find((item) => Number(item.id) === Number(id));
       if (!group) return null;
-      if (snapshot.data.groups.some((item) => item.name === name && Number(item.id) !== Number(id))) {
+      if (snapshot.data.groups.some((item) => sameGroupName(item.name, name) && Number(item.id) !== Number(id))) {
         throw conflict('A group with that name already exists');
       }
       group.name = name;
@@ -631,11 +643,18 @@ const store = {
     });
   },
 
+  // The record an earlier request with this id created, if any.
+  async findCreated(kind, opId) {
+    if (!opId) return null;
+    return locked(async () => findRepeat((await loadData()).data, kind, opId));
+  },
+
   async createEntry(row, opId) {
     return locked(async () => {
       const snapshot = await loadData();
       const repeat = findRepeat(snapshot.data, 'entry', opId);
       if (repeat) return repeat;
+      await rejectTakenSerial(snapshot.data, row.serial_no, null);
       const stamp = nowStamp();
       const created = { ...row, id: nextId(snapshot.data, 'entries'), created_at: stamp, updated_at: stamp };
       snapshot.data.entries.push(created);
@@ -652,6 +671,7 @@ const store = {
       const index = snapshot.data.entries.findIndex((entry) => Number(entry.id) === Number(id));
       if (index < 0) return null;
       const current = snapshot.data.entries[index];
+      await rejectTakenSerial(snapshot.data, row.serial_no, current.id);
       const updated = { ...current, ...row, id: current.id, created_at: current.created_at, updated_at: nowStamp() };
       snapshot.data.entries[index] = updated;
       await saveData(snapshot);

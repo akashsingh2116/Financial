@@ -39,59 +39,21 @@ const MIME_BY_EXT = {
   '.pdf': 'application/pdf',
 };
 
-const REQUIRED_ENTRY_FIELDS = [
-  'serial_no', 'owner_name', 'product', 'amount', 'maturity_amount',
-  'date_of_issue', 'date_of_maturity', 'nominee_name',
-];
+// The same rules the entry form uses (server/entryRules.mjs), loaded once.
+const entryRules = import('./entryRules.mjs');
 
-function optionalRate(value) {
-  if (value === '' || value == null) return null;
-  const rate = Number(value);
-  return Number.isFinite(rate) ? rate : Number.NaN;
-}
-
-function toEntryRow(body) {
-  return {
-    serial_no: String(body.serial_no || '').trim(),
-    owner_name: String(body.owner_name || '').trim(),
-    product: String(body.product || '').trim(),
-    issuer: body.issuer ? String(body.issuer).trim() : null,
-    amount: Number(body.amount),
-    interest_rate: optionalRate(body.interest_rate),
-    maturity_amount: Number(body.maturity_amount),
-    date_of_issue: String(body.date_of_issue || '').trim(),
-    date_of_maturity: String(body.date_of_maturity || '').trim(),
-    nominee_name: String(body.nominee_name || '').trim(),
-    nominee_relation: body.nominee_relation ? String(body.nominee_relation).trim() : null,
-    premium_frequency: body.premium_frequency ? String(body.premium_frequency).trim() : null,
-    status: body.status ? String(body.status).trim() : 'active',
-    remarks: body.remarks ? String(body.remarks).trim() : null,
-    group_id: optionalGroupId(body.group_id),
-  };
-}
-
-function optionalGroupId(value) {
-  if (value === '' || value == null) return null;
-  const id = Number(value);
-  if (!Number.isInteger(id) || id <= 0) return Number.NaN;
-  return id;
-}
-
-async function validateEntry(row) {
-  for (const field of REQUIRED_ENTRY_FIELDS) {
-    const value = row[field];
-    if (value === '' || value === null || value === undefined || Number.isNaN(value)) {
-      return `Missing or invalid required field: ${field}`;
-    }
+// Cleans and checks an entry. Returns { row } when it can be saved, or
+// { error, fields } describing what to fix.
+async function checkEntryInput(body, { selfId = null } = {}) {
+  const { normalizeEntry, checkEntry } = await entryRules;
+  const row = normalizeEntry(body);
+  const { errors } = checkEntry(row, { entries: await store.listEntries(), selfId });
+  if (!errors.group_id && row.group_id != null && !(await store.getGroup(row.group_id))) {
+    errors.group_id = 'That group no longer exists';
   }
-  if (Number.isNaN(row.interest_rate) || (row.interest_rate != null && row.interest_rate < 0)) {
-    return 'Invalid rate of interest';
-  }
-  if (Number.isNaN(row.group_id)) return 'Invalid group';
-  if (row.group_id != null && !(await store.getGroup(row.group_id))) {
-    return 'Group does not exist';
-  }
-  return null;
+  const fields = Object.keys(errors);
+  if (fields.length) return { error: errors[fields[0]], fields: errors };
+  return { row };
 }
 
 async function discardUpload(file) {
@@ -172,7 +134,7 @@ app.use('/api/notes', requireAuth);
 app.use('/api/groups', requireAuth);
 
 function cleanGroupName(value) {
-  return String(value || '').trim();
+  return String(value || '').replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function rejectConflict(err, res) {
@@ -254,11 +216,17 @@ app.get('/api/entries/:id/document', async (req, res, next) => {
 });
 
 app.post('/api/entries', upload.single('document'), async (req, res) => {
-  const row = toEntryRow(req.body);
-  const error = await validateEntry(row);
+  // A resent create that was already saved returns that record before any
+  // checks, otherwise it would be rejected as a duplicate of itself.
+  const repeat = await store.findCreated?.('entry', opId(req));
+  if (repeat) {
+    await discardUpload(req.file);
+    return res.status(201).json(repeat);
+  }
+  const { row, error, fields } = await checkEntryInput(req.body);
   if (error) {
     await discardUpload(req.file);
-    return res.status(400).json({ error });
+    return res.status(fields?.serial_no?.includes('already saved') ? 409 : 400).json({ error, fields });
   }
 
   let documentPath = null;
@@ -285,11 +253,10 @@ app.put('/api/entries/:id', upload.single('document'), async (req, res) => {
     return res.status(404).json({ error: 'Entry not found' });
   }
 
-  const row = toEntryRow(req.body);
-  const error = await validateEntry(row);
+  const { row, error, fields } = await checkEntryInput(req.body, { selfId: existing.id });
   if (error) {
     await discardUpload(req.file);
-    return res.status(400).json({ error });
+    return res.status(fields?.serial_no?.includes('already saved') ? 409 : 400).json({ error, fields });
   }
 
   const removeDocument = req.body.remove_document === 'true';

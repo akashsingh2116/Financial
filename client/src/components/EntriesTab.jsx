@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import EntryFormModal from './EntryFormModal';
 import EntryDetailModal from './EntryDetailModal';
+import { checkEntry, normalizeEntry } from '../../../server/entryRules.mjs';
 import { createEntry, createGroup, updateEntry, deleteEntry } from '../api';
 import { STATUS_OPTIONS } from '../constants';
 import { daysUntil, formatDate, formatMoney } from '../format';
@@ -160,6 +161,7 @@ export default function EntriesTab({ entries, notes, groups = [], reload }) {
       const knownGroups = [...groups];
       let added = 0;
       let skipped = 0;
+      const imported = [];
       for (const record of records) {
         const key = entryKey(record);
         if (seen.has(key)) {
@@ -176,7 +178,23 @@ export default function EntriesTab({ entries, notes, groups = [], reload }) {
           }
           formData.set('group_id', String(group.id));
         }
-        await createEntry(formData);
+        // Each row is checked with the same rules as the form; a bad row is
+        // listed and skipped instead of stopping the rest of the import.
+        const label = record.serial_no || `row ${added + skipped + errors.length + 1}`;
+        const row = normalizeEntry(Object.fromEntries(formData.entries()));
+        const { errors: rowErrors } = checkEntry(row, { entries: [...entries, ...imported] });
+        const firstError = Object.values(rowErrors).find(Boolean);
+        if (firstError) {
+          errors.push(`${label}: ${firstError}.`);
+          continue;
+        }
+        try {
+          await createEntry(formData);
+        } catch (err) {
+          errors.push(`${label}: ${err.message}.`);
+          continue;
+        }
+        imported.push(row);
         seen.add(key);
         added += 1;
       }
@@ -362,6 +380,7 @@ export default function EntriesTab({ entries, notes, groups = [], reload }) {
       {modalEntry !== undefined && (
         <EntryFormModal
           entry={modalEntry}
+          entries={entries}
           groups={groups}
           onClose={() => setModalEntry(undefined)}
           onSubmit={handleSubmit}

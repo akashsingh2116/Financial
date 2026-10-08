@@ -13,6 +13,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // The entry form shares its rules with the API (../server/entryRules.mjs).
+    fs: { allow: ['..'] },
     proxy: {
       '/api': 'http://localhost:4000',
     },

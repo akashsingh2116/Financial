@@ -1,7 +1,16 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { PRODUCT_TYPES, STATUS_OPTIONS, PREMIUM_FREQUENCIES } from '../constants';
 import DocumentPreview from './DocumentPreview';
 import { calculateMaturityAmount } from '../interest';
+import {
+  checkEntry, normalizeEntry, ISSUER_MAX, NAME_MAX, PRODUCT_MAX, RELATION_MAX, REMARKS_MAX, SERIAL_MAX,
+} from '../../../server/entryRules.mjs';
+import { ACCEPTED_TYPES, prepareUpload } from '../prepareUpload';
+
+const todayIso = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
 
 const EMPTY_FORM = {
   serial_no: '',
@@ -56,13 +65,20 @@ const REQUIRED_LABELS = {
   nominee_name: 'Nominee name',
 };
 
-export default function EntryFormModal({ entry, groups = [], defaultGroupId = '', onClose, onSubmit }) {
+export default function EntryFormModal({ entry, entries = [], groups = [], defaultGroupId = '', onClose, onSubmit }) {
   const [form, setForm] = useState(() => toFormState(entry, defaultGroupId));
   const [file, setFile] = useState(null);
   const [removeDocument, setRemoveDocument] = useState(false);
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [warnings, setWarnings] = useState([]);
+  const [acceptedWarnings, setAcceptedWarnings] = useState('');
+  const [preparing, setPreparing] = useState(false);
+  const [fileNote, setFileNote] = useState('');
+  // Set synchronously so a fast second tap cannot submit the same entry twice.
+  const submittingRef = useRef(false);
+  const formRef = useRef(null);
 
   const isEdit = Boolean(entry);
 
@@ -71,6 +87,8 @@ export default function EntryFormModal({ entry, groups = [], defaultGroupId = ''
 ]);
 
 function update(field, value) {
+    // Editing a field clears its message; everything is checked again on Save.
+    setErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
     setForm((current) => {
       const next = { ...current, [field]: value };
       if (!MATURITY_INPUTS.has(field)) return next;
@@ -80,87 +98,80 @@ function update(field, value) {
     });
   }
 
+  // Runs the same rules as the server. Returns the cleaned entry, or null
+  // when something must be fixed (errors are shown next to the fields).
   function validate() {
-    const next = {};
-    const finalProduct = form.product === 'Other' ? form.product_other.trim() : form.product;
-
-    if (!form.serial_no.trim()) next.serial_no = 'Required';
-    if (!form.owner_name.trim()) next.owner_name = 'Required';
-    if (!finalProduct) next.product = 'Required';
-    if (form.amount === '' || Number.isNaN(Number(form.amount)) || Number(form.amount) < 0) {
-      next.amount = 'Enter a valid amount';
+    const finalProduct = form.product === 'Other' ? form.product_other : form.product;
+    const row = normalizeEntry({ ...form, product: finalProduct });
+    const result = checkEntry(row, { entries, selfId: entry?.id ?? null });
+    setErrors(result.errors);
+    setWarnings(result.warnings);
+    if (Object.keys(result.errors).length) {
+      // Bring the first problem into view, which matters on a phone.
+      requestAnimationFrame(() => formRef.current?.querySelector('.field-error')?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+      return null;
     }
-    if (form.interest_rate !== '' && (Number.isNaN(Number(form.interest_rate)) || Number(form.interest_rate) < 0)) {
-      next.interest_rate = 'Enter a valid rate';
-    }
-    if (form.maturity_amount === '' || Number.isNaN(Number(form.maturity_amount)) || Number(form.maturity_amount) < 0) {
-      next.maturity_amount = 'Enter a valid amount';
-    }
-    if (!form.date_of_issue) next.date_of_issue = 'Required';
-    if (!form.date_of_maturity) next.date_of_maturity = 'Required';
-    if (form.date_of_issue && form.date_of_maturity && form.date_of_maturity < form.date_of_issue) {
-      next.date_of_maturity = 'Must be on/after date of issue';
-    }
-    if (!form.nominee_name.trim()) next.nominee_name = 'Required';
-    setErrors(next);
-    return Object.keys(next).length === 0;
+    return { row, warningKey: result.warnings.join('|') };
   }
 
-  function handleFileChange(e) {
-    const f = e.target.files?.[0];
-    if (!f) {
+  async function handleFileChange(e) {
+    const input = e.target;
+    const chosen = input.files?.[0];
+    setFileNote('');
+    setErrors((current) => ({ ...current, document: undefined }));
+    if (!chosen) {
       setFile(null);
       return;
     }
-    const okType = f.type.startsWith('image/') || f.type === 'application/pdf';
-    if (!okType) {
-      setSubmitError('Only image or PDF files are allowed.');
-      e.target.value = '';
+    setPreparing(true);
+    const result = await prepareUpload(chosen);
+    setPreparing(false);
+    if (result.error) {
+      setErrors((current) => ({ ...current, document: result.error }));
+      input.value = '';
       setFile(null);
       return;
     }
-    if (f.size > 15 * 1024 * 1024) {
-      setSubmitError('File must be under 15 MB.');
-      e.target.value = '';
-      setFile(null);
-      return;
+    if (result.shrunk) {
+      setFileNote(`Photo reduced from ${(result.shrunk.from / 1048576).toFixed(1)} MB to ${(result.shrunk.to / 1048576).toFixed(1)} MB so it uploads quickly.`);
     }
-    setSubmitError('');
-    setFile(f);
+    setFile(result.file);
     setRemoveDocument(false);
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (submittingRef.current || preparing) return;
     setSubmitError('');
-    if (!validate()) return;
+    const checked = validate();
+    if (!checked) return;
+    // Warnings do not block, but the first Save shows them; the next one saves.
+    if (checked.warningKey && checked.warningKey !== acceptedWarnings) {
+      setAcceptedWarnings(checked.warningKey);
+      return;
+    }
 
-    const finalProduct = form.product === 'Other' ? form.product_other.trim() : form.product;
+    const { row } = checked;
     const fd = new FormData();
-    fd.append('serial_no', form.serial_no.trim());
-    fd.append('owner_name', form.owner_name.trim());
-    fd.append('product', finalProduct);
-    fd.append('issuer', form.issuer.trim());
-    fd.append('amount', form.amount);
-    fd.append('interest_rate', form.interest_rate);
-    fd.append('maturity_amount', form.maturity_amount);
-    fd.append('date_of_issue', form.date_of_issue);
-    fd.append('date_of_maturity', form.date_of_maturity);
-    fd.append('nominee_name', form.nominee_name.trim());
-    fd.append('nominee_relation', form.nominee_relation.trim());
-    fd.append('premium_frequency', form.premium_frequency);
-    fd.append('status', form.status);
-    fd.append('group_id', form.group_id);
-    fd.append('remarks', form.remarks.trim());
+    for (const key of [
+      'serial_no', 'owner_name', 'product', 'issuer', 'amount', 'interest_rate', 'maturity_amount',
+      'date_of_issue', 'date_of_maturity', 'nominee_name', 'nominee_relation', 'premium_frequency',
+      'status', 'remarks',
+    ]) {
+      fd.append(key, row[key] == null ? '' : String(row[key]));
+    }
+    fd.append('group_id', row.group_id == null ? '' : String(row.group_id));
     if (file) fd.append('document', file);
     if (removeDocument) fd.append('remove_document', 'true');
 
+    submittingRef.current = true;
     setSaving(true);
     try {
       await onSubmit(fd);
     } catch (err) {
       setSubmitError(err.message || 'Something went wrong');
     } finally {
+      submittingRef.current = false;
       setSaving(false);
     }
   }
@@ -173,14 +184,14 @@ function update(field, value) {
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
-        <form onSubmit={handleSubmit} className="entry-form">
+        <form ref={formRef} onSubmit={handleSubmit} className="entry-form" noValidate>
           <div className="form-grid">
             <Field label={`${REQUIRED_LABELS.serial_no} *`} error={errors.serial_no}>
-              <input value={form.serial_no} onChange={(e) => update('serial_no', e.target.value)} placeholder="e.g. LIC-882910" />
+              <input value={form.serial_no} onChange={(e) => update('serial_no', e.target.value)} placeholder="e.g. LIC-882910" maxLength={SERIAL_MAX} autoCapitalize="characters" autoComplete="off" spellCheck={false} />
             </Field>
 
             <Field label={`${REQUIRED_LABELS.owner_name} *`} error={errors.owner_name}>
-              <input value={form.owner_name} onChange={(e) => update('owner_name', e.target.value)} placeholder="Policy holder name" />
+              <input value={form.owner_name} onChange={(e) => update('owner_name', e.target.value)} placeholder="Policy holder name" maxLength={NAME_MAX} autoCapitalize="words" />
             </Field>
 
             <Field label={`${REQUIRED_LABELS.product} *`} error={errors.product}>
@@ -193,6 +204,7 @@ function update(field, value) {
                   value={form.product_other}
                   onChange={(e) => update('product_other', e.target.value)}
                   placeholder="Specify product type"
+                  maxLength={PRODUCT_MAX}
                 />
               )}
             </Field>
@@ -205,15 +217,15 @@ function update(field, value) {
             </Field>
 
             <Field label="Issuer / Company" hint="e.g. LIC of India, SBI, HDFC">
-              <input value={form.issuer} onChange={(e) => update('issuer', e.target.value)} placeholder="Optional" />
+              <input value={form.issuer} onChange={(e) => update('issuer', e.target.value)} placeholder="Optional" maxLength={ISSUER_MAX} />
             </Field>
 
             <Field label={`${REQUIRED_LABELS.amount} (₹) *`} error={errors.amount}>
-              <input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => update('amount', e.target.value)} placeholder="Invested / premium amount" />
+              <input type="number" inputMode="decimal" min="0" step="0.01" value={form.amount} onChange={(e) => update('amount', e.target.value)} onWheel={(e) => e.currentTarget.blur()} placeholder="Invested / premium amount" />
             </Field>
 
             <Field label="Rate of interest (%)" error={errors.interest_rate} hint="Optional. Fills the maturity amount from the amount, dates, and premium frequency.">
-              <input type="number" min="0" step="0.01" value={form.interest_rate} onChange={(e) => update('interest_rate', e.target.value)} placeholder="e.g. 7.5" />
+              <input type="number" inputMode="decimal" min="0" max="50" step="0.01" value={form.interest_rate} onChange={(e) => update('interest_rate', e.target.value)} onWheel={(e) => e.currentTarget.blur()} placeholder="e.g. 7.5" />
             </Field>
 
             <Field
@@ -221,23 +233,23 @@ function update(field, value) {
               error={errors.maturity_amount}
               hint={form.interest_rate !== '' ? 'Calculated from the rate of interest. You can still edit it.' : undefined}
             >
-              <input type="number" min="0" step="0.01" value={form.maturity_amount} onChange={(e) => update('maturity_amount', e.target.value)} placeholder="Expected amount at maturity" />
+              <input type="number" inputMode="decimal" min="0" step="0.01" value={form.maturity_amount} onChange={(e) => update('maturity_amount', e.target.value)} onWheel={(e) => e.currentTarget.blur()} placeholder="Expected amount at maturity" />
             </Field>
 
             <Field label={`${REQUIRED_LABELS.date_of_issue} *`} error={errors.date_of_issue}>
-              <input type="date" value={form.date_of_issue} onChange={(e) => update('date_of_issue', e.target.value)} />
+              <input type="date" min="1950-01-01" max={todayIso()} value={form.date_of_issue} onChange={(e) => update('date_of_issue', e.target.value)} />
             </Field>
 
             <Field label={`${REQUIRED_LABELS.date_of_maturity} *`} error={errors.date_of_maturity}>
-              <input type="date" value={form.date_of_maturity} onChange={(e) => update('date_of_maturity', e.target.value)} />
+              <input type="date" min={form.date_of_issue || '1950-01-01'} max="2100-12-31" value={form.date_of_maturity} onChange={(e) => update('date_of_maturity', e.target.value)} />
             </Field>
 
             <Field label={`${REQUIRED_LABELS.nominee_name} *`} error={errors.nominee_name}>
-              <input value={form.nominee_name} onChange={(e) => update('nominee_name', e.target.value)} placeholder="Nominee full name" />
+              <input value={form.nominee_name} onChange={(e) => update('nominee_name', e.target.value)} placeholder="Nominee full name" maxLength={NAME_MAX} autoCapitalize="words" />
             </Field>
 
-            <Field label="Nominee relation">
-              <input value={form.nominee_relation} onChange={(e) => update('nominee_relation', e.target.value)} placeholder="e.g. Spouse, Son, Daughter" />
+            <Field label="Nominee relation" error={errors.nominee_relation}>
+              <input value={form.nominee_relation} onChange={(e) => update('nominee_relation', e.target.value)} placeholder="e.g. Spouse, Son, Daughter" maxLength={RELATION_MAX} autoCapitalize="words" />
             </Field>
 
             <Field label="Premium frequency">
@@ -253,12 +265,12 @@ function update(field, value) {
             </Field>
           </div>
 
-          <Field label="Remarks">
-            <textarea rows={2} value={form.remarks} onChange={(e) => update('remarks', e.target.value)} placeholder="Any additional details..." />
+          <Field label="Remarks" error={errors.remarks} hint={form.remarks.length > REMARKS_MAX - 100 ? `${form.remarks.length} / ${REMARKS_MAX} characters` : undefined}>
+            <textarea rows={2} value={form.remarks} onChange={(e) => update('remarks', e.target.value)} placeholder="Any additional details..." maxLength={REMARKS_MAX} />
           </Field>
 
-          <Field label="Document (image or PDF)">
-            <input type="file" accept="image/*,application/pdf" onChange={handleFileChange} />
+          <Field label="Document (image or PDF)" error={errors.document} hint={preparing ? 'Preparing photo…' : fileNote || 'JPG, PNG, WEBP, GIF or PDF, up to 4 MB. Large photos are reduced automatically.'}>
+            <input type="file" accept={ACCEPTED_TYPES.join(',')} onChange={handleFileChange} disabled={saving} />
             {file && <DocumentPreview file={file} />}
             {isEdit && entry?.document_path && !file && !removeDocument && (
               <div className="existing-doc">
@@ -269,12 +281,23 @@ function update(field, value) {
             {removeDocument && <div className="hint">Document will be removed on save.</div>}
           </Field>
 
+          {warnings.length > 0 && Object.keys(errors).filter((key) => errors[key]).length === 0 && (
+            <div className="form-warning" role="status">
+              <strong>Please double-check:</strong>
+              <ul>{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+              <span>Save again to keep it as it is.</span>
+            </div>
+          )}
           {submitError && <div className="form-error">{submitError}</div>}
 
           <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Add Entry'}
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={saving || preparing}>
+              {saving
+                ? 'Saving...'
+                : warnings.length > 0 && acceptedWarnings === warnings.join('|')
+                  ? 'Save anyway'
+                  : isEdit ? 'Save Changes' : 'Add Entry'}
             </button>
           </div>
         </form>
