@@ -12,6 +12,11 @@ const SCOPES = [
 ].join(' ');
 
 const GOOGLE_TIMEOUT_MS = 15000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// While the Google Cloud app is in "Testing", Google ends its Drive access 7
+// days after each connection. Warn from day 5 so it can be renewed in time.
+const TESTING_ACCESS_DAYS = 7;
+const RENEW_WARNING_DAYS = 5;
 
 let session = null;
 let access = { token: '', exp: 0 };
@@ -210,6 +215,9 @@ async function completeLogin(code, redirectUri) {
     email,
     folderId: previous.folderId || '',
     dataFileId: previous.dataFileId || '',
+    // A new refresh token starts a new 7-day window.
+    connectedAt: tokens.refresh_token ? new Date().toISOString() : (previous.connectedAt || ''),
+    longLived: tokens.refresh_token ? false : Boolean(previous.longLived),
   });
   if (!session.refresh_token) {
     throw new Error('Google did not grant offline access. Approve the request again.');
@@ -258,19 +266,49 @@ async function getAccessToken() {
     // Not 401: the browser treats that as its own login expiring. Changes
     // waiting on this device stay queued until Drive works again.
     error.status = 503;
+    error.reconnect = expired;
     throw error;
   }
   access = { token: payload.access_token, exp: Date.now() + (payload.expires_in || 3600) * 1000 };
   return access.token;
 }
 
+// Also asks Google whether the saved access still works, so the page can
+// offer to reconnect instead of only showing a connected address.
 async function status() {
   await whenReady();
+  let needsReconnect = false;
+  let working = false;
+  if (hasSession() && isConfigured()) {
+    try {
+      await getAccessToken();
+      working = true;
+    } catch (error) {
+      needsReconnect = Boolean(error.reconnect);
+    }
+  }
   return {
     configured: isConfigured(),
     connected: hasSession(),
+    needsReconnect,
+    renewBy: working ? await renewBy() : '',
     email: session?.email || '',
   };
+}
+
+// When the access may end soon, returns the date to reconnect by. Access that
+// keeps working past the testing limit belongs to a published app and never
+// needs this, so the warning switches itself off.
+async function renewBy() {
+  const connectedAt = Date.parse(session?.connectedAt || '');
+  if (!connectedAt || session.longLived) return '';
+  const age = Date.now() - connectedAt;
+  if (age > (TESTING_ACCESS_DAYS + 0.5) * DAY_MS) {
+    await writeSession({ ...session, longLived: true });
+    return '';
+  }
+  if (age < RENEW_WARNING_DAYS * DAY_MS) return '';
+  return new Date(connectedAt + TESTING_ACCESS_DAYS * DAY_MS).toISOString();
 }
 
 async function disconnect() {

@@ -102,6 +102,9 @@ export async function disconnectGoogle() {
 
 let chain = Promise.resolve();
 let lastSyncError = '';
+// Why the latest list came from this device instead of the server, when the
+// connection is fine but the server or Google Drive is not.
+let lastLoadError = '';
 
 function locked(fn) {
   const run = chain.then(fn, fn);
@@ -155,7 +158,7 @@ async function publishStatus(offline = !navigator.onLine) {
     detail: {
       offline,
       pending: ops.length,
-      error: lastSyncError,
+      error: lastSyncError || lastLoadError,
       failed: failed.map((op) => ({ id: op.id, kind: op.kind, action: op.action, reason: op.reason })),
     },
   }));
@@ -331,12 +334,15 @@ async function mergedList(kind, path) {
     const rows = await handle(await send(path, { headers: authHeaders() }));
     await saveSnapshot(kind, rows);
     const merged = mergeRecords(rows, await loadOps(), kind);
+    lastLoadError = '';
     await publishStatus(false);
     return merged;
   } catch (error) {
     if (!error.retry) throw error;
     const merged = mergeRecords(await loadSnapshot(kind), await loadOps(), kind);
-    await publishStatus(true);
+    // Only a real lost connection is "offline"; a server or Drive problem says what it is.
+    lastLoadError = error.offline ? '' : `${error.message} Showing the copy saved on this device.`;
+    await publishStatus(Boolean(error.offline));
     return merged;
   }
 }

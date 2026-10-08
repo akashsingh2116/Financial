@@ -178,6 +178,14 @@ export default function App() {
     return <LoginPage onLogin={setToken} />;
   }
 
+  const renewByText = drive.renewBy
+    ? new Date(drive.renewBy).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+    : '';
+
+  function reconnect() {
+    startGoogleConnect().catch((err) => setDriveError(err.message));
+  }
+
   function handleLogout() {
     logout();
     setToken(null);
@@ -198,7 +206,18 @@ export default function App() {
             </div>
           </div>
           <div className="header-actions">
-            {drive.connected ? (
+            {drive.connected && (drive.needsReconnect || drive.renewBy) ? (
+              <div
+                className="drive-chip is-expired"
+                title={drive.needsReconnect ? `Google Drive access for ${drive.email} has expired` : `Reconnect by ${renewByText}`}
+              >
+                <span className="drive-dot" aria-hidden="true" />
+                <span className="drive-email">{drive.email}</span>
+                <button className="btn btn-primary header-quiet" onClick={reconnect}>
+                  Reconnect
+                </button>
+              </div>
+            ) : drive.connected ? (
               <div className="drive-chip" title={drive.email}>
                 <span className="drive-dot" aria-hidden="true" />
                 <span className="drive-email">{drive.email}</span>
@@ -254,7 +273,7 @@ export default function App() {
             {pending} saved {pending === 1 ? 'change is' : 'changes are'} waiting to reach the database.
           </div>
         )}
-        {syncError && <div className="banner banner-error">{syncError}</div>}
+        {syncError && !drive.needsReconnect && <div className="banner banner-error">{syncError}</div>}
         {failed.length > 0 && (
           <div className="banner banner-error banner-actions">
             <span>
@@ -280,7 +299,29 @@ export default function App() {
             Connect Gmail opens Google's page. Enter that Gmail and password there, then approve access. Records and files are saved in that Drive. This app never sees the password.
           </div>
         )}
-        {drive.connected && (
+        {drive.connected && drive.needsReconnect && (
+          <div className="banner banner-error banner-actions">
+            <span>
+              Google Drive access for {drive.email} has expired, so this shows the copy saved on this device.
+              Changes you make are kept here and sync after you reconnect.
+            </span>
+            <span className="banner-buttons">
+              <button type="button" className="btn btn-primary" onClick={reconnect}>Reconnect Google Drive</button>
+            </span>
+          </div>
+        )}
+        {drive.connected && !drive.needsReconnect && drive.renewBy && (
+          <div className="banner banner-warn banner-actions">
+            <span>
+              Google Drive access for {drive.email} ends on {renewByText}. Reconnect before then to keep syncing;
+              it takes a few seconds and nothing is lost.
+            </span>
+            <span className="banner-buttons">
+              <button type="button" className="btn btn-primary" onClick={reconnect}>Reconnect now</button>
+            </span>
+          </div>
+        )}
+        {drive.connected && !drive.needsReconnect && !drive.renewBy && (
           <div className="banner">
             Records and files are saved in {drive.email}'s Google Drive.
           </div>

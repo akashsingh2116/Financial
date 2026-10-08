@@ -279,6 +279,17 @@ body::after {
   animation: dot-pulse 1.8s ease-out infinite;
 }
 
+/* Saved Google access no longer works: amber instead of green, no pulse. */
+.drive-chip.is-expired {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.drive-chip.is-expired .drive-dot {
+  background: #fbbf24;
+  animation: none;
+}
+
 .drive-email {
   overflow: hidden;
   text-overflow: ellipsis;
