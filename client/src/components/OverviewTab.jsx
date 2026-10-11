@@ -2,8 +2,11 @@ import { useMemo, useState } from 'react';
 import { PRODUCT_COLORS, STATUS_COLORS } from '../constants';
 import { daysUntil, formatMoney } from '../format';
 
+const DUE_WINDOWS = [30, 60, 90];
+
 export default function OverviewTab({ entries, groups = [] }) {
   const [groupId, setGroupId] = useState('all');
+  const [dueWindow, setDueWindow] = useState(90);
   const scoped = useMemo(() => {
     if (groupId === 'all') return entries;
     if (groupId === 'none') return entries.filter((entry) => !entry.group_id);
@@ -32,7 +35,7 @@ export default function OverviewTab({ entries, groups = [] }) {
     const upcomingAll = scoped
       .filter((e) => e.status === 'active')
       .map((e) => ({ ...e, days: daysUntil(e.date_of_maturity) }))
-      .filter((e) => e.days <= 90)
+      .filter((e) => e.days <= dueWindow)
       .sort((a, b) => a.days - b.days);
     const upcoming = upcomingAll.slice(0, 30);
 
@@ -47,7 +50,7 @@ export default function OverviewTab({ entries, groups = [] }) {
       upcoming,
       upcomingCount: upcomingAll.length,
     };
-  }, [scoped]);
+  }, [scoped, dueWindow]);
 
   if (entries.length === 0) {
     return <div className="empty-state">No entries yet. Add one from the "Finance Entries" tab to see your overview.</div>;
@@ -75,9 +78,24 @@ export default function OverviewTab({ entries, groups = [] }) {
 
       <div className="analytics-grid">
         <div className="panel">
-          <h3>Due within 90 days{stats.upcomingCount > stats.upcoming.length ? ` · ${stats.upcoming.length} of ${stats.upcomingCount}` : ''}</h3>
+          <div className="panel-head">
+            <h3>Due within {dueWindow} days{stats.upcomingCount > stats.upcoming.length ? ` · ${stats.upcoming.length} of ${stats.upcomingCount}` : ''}</h3>
+            <div className="segmented" role="group" aria-label="Due window">
+              {DUE_WINDOWS.map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  className={days === dueWindow ? 'is-active' : ''}
+                  aria-pressed={days === dueWindow}
+                  onClick={() => setDueWindow(days)}
+                >
+                  {days}d
+                </button>
+              ))}
+            </div>
+          </div>
           {stats.upcoming.length === 0 ? (
-            <div className="muted">Nothing maturing in the next 90 days.</div>
+            <div className="muted">Nothing maturing in the next {dueWindow} days.</div>
           ) : (
             <ul className="upcoming-list">
               {stats.upcoming.map((e) => (

@@ -123,6 +123,36 @@ li {
 
 .muted { color: var(--muted); font-size: 12px; }
 
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.section-head h2 { margin: 0; }
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.segmented button {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.segmented button.is-active {
+  background: linear-gradient(135deg, #818cf8, #4f46e5);
+  color: white;
+}
+
 h2 {
   margin: 0 0 4px;
   font-size: 12px;

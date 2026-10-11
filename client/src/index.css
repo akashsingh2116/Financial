@@ -865,6 +865,44 @@ tbody tr:last-child td { border-bottom: none; }
 
 .panel h3 { margin-top: 0; font-size: 1rem; color: var(--text); }
 
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.panel-head h3 { margin: 0; }
+
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-alt);
+}
+
+.segmented button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.segmented button:hover { color: var(--text); }
+
+.segmented button.is-active {
+  background: var(--gradient-primary);
+  color: #fff;
+}
+
 .recharts-legend-item-text,
 .recharts-legend-item text {
   fill: var(--text) !important;

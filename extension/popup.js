@@ -71,12 +71,14 @@ function loginView(message) {
   });
 }
 
-function summaryView(entries) {
+const DUE_WINDOWS = [30, 60, 90];
+
+function summaryView(entries, dueWindow = 90) {
   const active = entries.filter((entry) => entry.status === 'active');
   const invested = active.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
   const upcoming = active
     .map((entry) => ({ ...entry, days: daysUntil(entry.date_of_maturity) }))
-    .filter((entry) => entry.days <= 90)
+    .filter((entry) => entry.days <= dueWindow)
     .sort((a, b) => a.days - b.days)
     .slice(0, 4);
 
@@ -86,8 +88,13 @@ function summaryView(entries) {
       <div class="stat"><span>Active</span><strong>${active.length}</strong></div>
       <div class="stat"><span>Invested</span><strong>₹${money(invested)}</strong></div>
     </div>
-    <h2>Upcoming</h2>
-    ${upcoming.length === 0 ? '<p class="muted">Nothing maturing in 90 days.</p>' : `
+    <div class="section-head">
+      <h2>Upcoming</h2>
+      <div class="segmented">
+        ${DUE_WINDOWS.map((days) => `<button type="button" data-days="${days}"${days === dueWindow ? ' class="is-active"' : ''}>${days}d</button>`).join('')}
+      </div>
+    </div>
+    ${upcoming.length === 0 ? `<p class="muted">Nothing maturing in ${dueWindow} days.</p>` : `
       <ul>
         ${upcoming.map((entry) => `
           <li>
@@ -102,6 +109,9 @@ function summaryView(entries) {
       <button id="logout" class="ghost" type="button">Log out</button>
     </div>
   `;
+  app.querySelectorAll('.segmented button').forEach((button) => {
+    button.addEventListener('click', () => summaryView(entries, Number(button.dataset.days)));
+  });
   app.querySelector('#open').addEventListener('click', () => chrome.tabs.create({ url: APP }));
   app.querySelector('#logout').addEventListener('click', async () => {
     const token = await getToken();

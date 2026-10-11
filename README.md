@@ -102,7 +102,7 @@ BACKUP_DIR="C:/Users/You/OneDrive/FinanceBackups" npm run dev
 
 ## Tabs
 
-- **Overview** — active invested/maturity/gain (closed policies are left out of the money totals), upcoming maturities (90 days), breakdown by product and status.
+- **Overview** — active invested/maturity/gain (closed policies are left out of the money totals), upcoming maturities (switchable 30 / 60 / 90 days), breakdown by product and status.
 - **Finance Entries** — the core record: serial/policy no., owner, product type, issuer,
   amount, maturity amount, issue/maturity dates, nominee (+ relation), premium frequency,
   status, remarks, and an attached image/PDF. Search, filter by owner/product/status, open a
